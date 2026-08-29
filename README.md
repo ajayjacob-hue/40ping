@@ -7,14 +7,15 @@
 ## 🏗️ Architecture Overview
 
 ```
-                                +-----------------------------+
-                                |      Physical ESP32         |
-                                |  (or ESP32 Web Simulator)   |
-                                +--------------+--------------+
-                                               |
-                                     Wi-Fi HTTP REST API
-                                               |
-                                               v
+                                 +-----------------------------+
+                                 |      Physical ESP32         |
+                                 |  (or ESP32 Web Simulator)   |
+                                 +--------------+--------------+
+                                                |
+                                    Wi-Fi HTTP REST API
+                                 (Telemetry & 100ms Fast Poll)
+                                                |
+                                                v
 +-----------------------------------------------------------------------------------------------+
 | Laptop / Local Server (Bound to 0.0.0.0:4000)                                                 |
 |                                                                                               |
@@ -25,10 +26,12 @@
 |   |   - Command Queue & ACK Handler                                                       |   |
 |   |   - Local IPv4 Auto-Discovery Module                                                  |   |
 |   |   - Real-Time Automation Engine (IF condition THEN actuate)                            |   |
-|   |   - Socket.IO Real-Time Server                                                        |   |
+|   |   - Socket.IO Real-Time Server (Broadcasting to Web Browsers)                         |   |
 |   |   - Extensible AI Copilot Abstraction                                                 |   |
 |   +--------------------------+------------------------------------+-----------------------+   |
 |                              |                                    |                           |
+|                              |             WebSocket              |                           |
+|                              |       (Real-time Event Stream)     |                           |
 |                              v                                    v                           |
 |                   +--------------------+                +-------------------+                 |
 |                   | PostgreSQL / DB    |                | Next.js Dashboard |                 |
