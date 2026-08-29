@@ -10,7 +10,6 @@ export default function Sidebar() {
   const navItems = [
     { name: 'Dashboard', href: '/dashboard', icon: LayoutDashboard },
     { name: 'Devices', href: '/devices', icon: Cpu },
-    { name: 'ESP32 Simulator', href: '/simulator', icon: Terminal },
   ];
 
   return (

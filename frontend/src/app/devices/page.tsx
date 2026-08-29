@@ -256,7 +256,7 @@ export default function DevicesPage() {
                       <ShieldCheck className="h-4 w-4 mr-1 text-blue-400" /> Auto-Generated Setup
                     </p>
                     <p className="text-gray-400 text-[11px] mt-0.5">
-                      The backend will assign a Device ID, generate a secure secret token, and pre-load demo GPIO pin mappings (DHT11 → 4, PIR → 5, LED → 18).
+                      The backend will assign a Device ID and generate a secure secret token. You can configure your hardware pins right after registration.
                     </p>
                   </div>
 

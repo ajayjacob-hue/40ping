@@ -68,14 +68,6 @@ export default function DashboardPage() {
         </div>
         <div className="flex items-center space-x-3">
           <Link
-            href="/simulator"
-            className="flex items-center space-x-2 px-4 py-2.5 bg-gray-800 hover:bg-gray-700 text-gray-200 rounded-xl text-sm font-medium transition-all border border-gray-700"
-          >
-            <Terminal className="h-4 w-4 text-emerald-400" />
-            <span>Launch Web Simulator</span>
-          </Link>
-
-          <Link
             href="/devices"
             className="flex items-center space-x-2 px-4 py-2.5 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-sm font-medium transition-all shadow-lg glow-blue"
           >
@@ -151,7 +143,7 @@ export default function DashboardPage() {
             <div className="p-12 text-center">
               <Cpu className="h-12 w-12 text-gray-600 mx-auto mb-3" />
               <h3 className="text-base font-semibold text-gray-300">No Devices Registered Yet</h3>
-              <p className="text-xs text-gray-400 mt-1 mb-4">Add your physical ESP32 or test using the built-in web simulator.</p>
+              <p className="text-xs text-gray-400 mt-1 mb-4">Register your physical ESP32 device to start monitoring telemetry.</p>
               <Link
                 href="/devices"
                 className="inline-flex items-center space-x-2 px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-medium"

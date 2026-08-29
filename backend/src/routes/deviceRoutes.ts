@@ -56,21 +56,6 @@ export function createDeviceManagementRouter(io: SocketIOServer): Router {
 
       const device = result.rows[0];
 
-      // Pre-seed default demo hardware components if requested or by default for fast onboarding
-      // DHT11 -> GPIO 4, PIR -> GPIO 5, LED -> GPIO 18
-      const defaultComponents = [
-        { name: 'Temperature & Humidity', type: 'DHT11', gpio: 4, category: 'INPUT' },
-        { name: 'Motion Sensor', type: 'PIR', gpio: 5, category: 'INPUT' },
-        { name: 'Status Indicator', type: 'LED', gpio: 18, category: 'OUTPUT' },
-      ];
-
-      for (const comp of defaultComponents) {
-        await query(
-          'INSERT INTO components (device_id, name, type, gpio_pin, category) VALUES ($1, $2, $3, $4, $5)',
-          [deviceId, comp.name, comp.type, comp.gpio, comp.category]
-        );
-      }
-
       // Log creation event
       await query(
         'INSERT INTO device_events (device_id, event_type, message) VALUES ($1, $2, $3)',

@@ -40,16 +40,7 @@ export default function HardwareConfigPage() {
         const res = await axios.get(`${getBackendUrl()}/api/devices/${deviceId}`);
         const comps: Component[] = res.data.components || [];
 
-        if (comps.length > 0) {
-          setComponents(comps);
-        } else {
-          // Pre-seed initial demo hardware defaults
-          setComponents([
-            { name: 'Temperature & Humidity', type: 'DHT11', gpio_pin: 4, category: 'INPUT' },
-            { name: 'Motion Sensor', type: 'PIR', gpio_pin: 5, category: 'INPUT' },
-            { name: 'Status LED', type: 'LED', gpio_pin: 18, category: 'OUTPUT' },
-          ]);
-        }
+        setComponents(comps);
       } catch (err) {
         console.error('Failed to load hardware config:', err);
       } finally {
@@ -208,7 +199,13 @@ export default function HardwareConfigPage() {
         </div>
 
         <div className="space-y-4">
-          {components.map((comp, index) => (
+          {components.length === 0 ? (
+            <div className="p-8 text-center border border-dashed border-gray-800 rounded-xl">
+              <p className="text-sm font-semibold text-gray-300">No hardware components configured yet</p>
+              <p className="text-xs text-gray-500 mt-1 mb-4">Click "+ Add Component" above to map your physical sensors and actuators.</p>
+            </div>
+          ) : (
+            components.map((comp, index) => (
             <div
               key={index}
               className="p-4 bg-gray-900/80 rounded-xl border border-gray-800 flex flex-col md:flex-row items-start md:items-center justify-between gap-4"
@@ -286,7 +283,8 @@ export default function HardwareConfigPage() {
                 <Trash2 className="h-4 w-4" />
               </button>
             </div>
-          ))}
+          ))
+          )}
         </div>
       </div>
     </div>

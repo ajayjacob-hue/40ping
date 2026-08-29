@@ -324,6 +324,44 @@ export default function DeviceDetailPage() {
     );
   }
 
+  const getActiveSensorKeys = (comps: Component[]): Set<string> => {
+    const activeKeys = new Set<string>();
+
+    comps.forEach((comp) => {
+      if (comp.category === 'OUTPUT') return;
+
+      const typeUpper = (comp.type || '').toUpperCase();
+      const nameLower = (comp.name || '').toLowerCase();
+
+      if (typeUpper.includes('DHT') || typeUpper.includes('TEMP') || nameLower.includes('temp') || nameLower.includes('dht')) {
+        activeKeys.add('temperature');
+        activeKeys.add('humidity');
+      }
+      if (typeUpper.includes('PIR') || typeUpper.includes('MOTION') || nameLower.includes('motion')) {
+        activeKeys.add('motion');
+      }
+      if (typeUpper.includes('HC-SR04') || typeUpper.includes('DISTANCE') || typeUpper.includes('ULTRASONIC') || nameLower.includes('distance')) {
+        activeKeys.add('distance');
+      }
+      if (typeUpper.includes('LDR') || typeUpper.includes('LIGHT') || nameLower.includes('light')) {
+        activeKeys.add('light');
+      }
+      if (typeUpper.includes('BUTTON') || nameLower.includes('button')) {
+        activeKeys.add('button');
+      }
+
+      if (comp.type) activeKeys.add(comp.type.toLowerCase().replace(/\s+/g, '_'));
+      if (comp.name) activeKeys.add(comp.name.toLowerCase().replace(/\s+/g, '_'));
+    });
+
+    return activeKeys;
+  };
+
+  const activeSensorKeys = getActiveSensorKeys(components);
+  const activeTelemetryEntries = Object.entries(liveTelemetry).filter(([key]) =>
+    activeSensorKeys.has(key.toLowerCase())
+  );
+
   const outputComponents = components.filter((c) => c.category === 'OUTPUT' || c.type === 'LED' || c.type === 'BUZZER' || c.type === 'SERVO' || c.type === 'GENERIC_OUTPUT');
 
   return (
@@ -383,12 +421,20 @@ export default function DeviceDetailPage() {
 
       {/* DYNAMIC SENSOR TELEMETRY CARDS GRID */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
-        {Object.keys(liveTelemetry).length === 0 ? (
+        {components.filter((c) => c.category !== 'OUTPUT').length === 0 ? (
           <div className="col-span-full glass-panel p-6 rounded-2xl border border-gray-800 text-center text-xs text-gray-400">
-            Waiting for live telemetry stream from ESP32...
+            No input sensors configured on this device yet. Click{' '}
+            <Link href={`/devices/${deviceId}/hardware`} className="text-blue-400 font-semibold underline">
+              Hardware Pins
+            </Link>{' '}
+            to assign your sensors.
+          </div>
+        ) : activeTelemetryEntries.length === 0 ? (
+          <div className="col-span-full glass-panel p-6 rounded-2xl border border-gray-800 text-center text-xs text-gray-400">
+            Waiting for live telemetry stream from configured sensors...
           </div>
         ) : (
-          Object.entries(liveTelemetry).map(([key, val]) => renderTelemetryCard(key, val))
+          activeTelemetryEntries.map(([key, val]) => renderTelemetryCard(key, val))
         )}
       </div>
 
@@ -418,10 +464,18 @@ export default function DeviceDetailPage() {
                 <Tooltip
                   contentStyle={{ backgroundColor: '#111827', borderColor: '#374151', borderRadius: '12px', fontSize: '12px' }}
                 />
-                <Line type="monotone" dataKey="temperature" name="Temperature (°C)" stroke="#F59E0B" strokeWidth={2.5} dot={false} />
-                <Line type="monotone" dataKey="humidity" name="Humidity (%)" stroke="#3B82F6" strokeWidth={2.5} dot={false} />
-                <Line type="monotone" dataKey="distance" name="Distance (cm)" stroke="#A855F7" strokeWidth={2.5} dot={false} />
-                <Line type="monotone" dataKey="light" name="Light (lux)" stroke="#EAB308" strokeWidth={2.5} dot={false} />
+                {activeSensorKeys.has('temperature') && (
+                  <Line type="monotone" dataKey="temperature" name="Temperature (°C)" stroke="#F59E0B" strokeWidth={2.5} dot={false} />
+                )}
+                {activeSensorKeys.has('humidity') && (
+                  <Line type="monotone" dataKey="humidity" name="Humidity (%)" stroke="#3B82F6" strokeWidth={2.5} dot={false} />
+                )}
+                {activeSensorKeys.has('distance') && (
+                  <Line type="monotone" dataKey="distance" name="Distance (cm)" stroke="#A855F7" strokeWidth={2.5} dot={false} />
+                )}
+                {activeSensorKeys.has('light') && (
+                  <Line type="monotone" dataKey="light" name="Light (lux)" stroke="#EAB308" strokeWidth={2.5} dot={false} />
+                )}
               </LineChart>
             </ResponsiveContainer>
           )}
@@ -441,29 +495,13 @@ export default function DeviceDetailPage() {
 
           <div className="space-y-4">
             {outputComponents.length === 0 ? (
-              /* Fallback default LED & Buzzer controls if no custom outputs mapped */
-              <>
-                <div className="p-4 bg-gray-900/80 rounded-xl border border-gray-800 flex items-center justify-between">
-                  <div>
-                    <span className="font-semibold text-sm text-white block">Status LED (GPIO 18)</span>
-                    <span className="text-xs text-gray-400">Digital Output</span>
-                  </div>
-                  <div className="flex items-center space-x-2">
-                    <button
-                      onClick={() => sendActuationCommand('GPIO_WRITE', 18, 1)}
-                      className={`px-3 py-1.5 rounded-lg text-xs font-semibold ${actuatorStates[18] === 1 ? 'bg-emerald-600 text-white shadow-lg glow-green' : 'bg-gray-800 text-gray-300 hover:bg-gray-700'}`}
-                    >
-                      Turn ON
-                    </button>
-                    <button
-                      onClick={() => sendActuationCommand('GPIO_WRITE', 18, 0)}
-                      className={`px-3 py-1.5 rounded-lg text-xs font-semibold ${actuatorStates[18] === 0 ? 'bg-red-600/30 text-red-300' : 'bg-gray-800 text-gray-300 hover:bg-gray-700'}`}
-                    >
-                      Turn OFF
-                    </button>
-                  </div>
-                </div>
-              </>
+              <div className="p-6 text-center border border-dashed border-gray-800 rounded-xl text-xs text-gray-400">
+                No output actuators configured on this device yet. Click{' '}
+                <Link href={`/devices/${deviceId}/hardware`} className="text-blue-400 font-semibold underline">
+                  Hardware Pins
+                </Link>{' '}
+                to assign your LEDs, Buzzers, Relays, or Motors.
+              </div>
             ) : (
               outputComponents.map((comp) => {
                 const pinState = actuatorStates[comp.gpio_pin] ?? 0;
