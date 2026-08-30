@@ -15,6 +15,7 @@
  */
 
 #include <WiFi.h>
+#include <WiFiClientSecure.h>
 #include <HTTPClient.h>
 #include <PubSubClient.h>
 #include <ArduinoJson.h>
@@ -26,10 +27,8 @@
 const char* WIFI_SSID     = "YOUR_WIFI_SSID";
 const char* WIFI_PASSWORD = "YOUR_WIFI_PASSWORD";
 
-// SERVER IP ADDRESS (Local LAN IP or Render Cloud domain e.g. "my-app.onrender.com")
-const char* SERVER_IP     = "192.168.1.100";
-const int   SERVER_PORT   = 4000;
-const int   MQTT_PORT     = 1883;
+// RENDER CLOUD BACKEND URL
+const char* SERVER_URL    = "https://iot-backend-2etp.onrender.com";
 
 // DEVICE CREDENTIALS GENERATED IN DASHBOARD (/devices)
 const char* DEVICE_ID     = "ESP32-A7F92";
@@ -53,11 +52,12 @@ int componentCount = 0;
 DHT* dhtSensor = nullptr;
 
 WiFiClient espClient;
+WiFiClientSecure secureEspClient;
 PubSubClient mqttClient(espClient);
 
 // Timers (ms)
 const unsigned long TELEMETRY_INTERVAL_MS      = 2000;  // Send telemetry every 2 seconds
-const unsigned long COMMAND_POLL_INTERVAL_MS    = 100;   // HTTP fallback command poll
+const unsigned long COMMAND_POLL_INTERVAL_MS    = 500;   // HTTP command poll interval
 const unsigned long HEARTBEAT_INTERVAL_MS       = 10000; // Heartbeat ping
 const unsigned long CONFIG_REFRESH_INTERVAL_MS  = 15000; // Hardware pin refresh
 
@@ -80,22 +80,33 @@ void sendSensorTelemetry();
 void pollAndExecuteCommands();
 void sendHeartbeat();
 void sendCommandAck(int commandId);
+void initHttpClient(HTTPClient& http, const String& url);
+
+void initHttpClient(HTTPClient& http, const String& url) {
+  if (url.startsWith("https://")) {
+    secureEspClient.setInsecure(); // Skip TLS cert validation for Render HTTPS
+    http.begin(secureEspClient, url);
+  } else {
+    http.begin(espClient, url);
+  }
+}
 
 void setup() {
   Serial.begin(115200);
   delay(1000);
 
   Serial.println("\n==================================================");
-  Serial.println("  IoT-to-Web Universal ESP32 Firmware (MQTT Hybrid)");
+  Serial.println("  IoT-to-Web Universal ESP32 Firmware (Cloud Connected)");
   Serial.println("==================================================");
 
-  serverBaseUrl       = "http://" + String(SERVER_IP) + ":" + String(SERVER_PORT) + "/api/device/" + String(DEVICE_ID);
+  String baseUrl = String(SERVER_URL);
+  if (baseUrl.endsWith("/")) {
+    baseUrl.remove(baseUrl.length() - 1);
+  }
+  serverBaseUrl       = baseUrl + "/api/device/" + String(DEVICE_ID);
   mqttTelemetryTopic  = "devices/" + String(DEVICE_ID) + "/telemetry";
   mqttCommandTopic    = "devices/" + String(DEVICE_ID) + "/commands";
   mqttStatusTopic     = "devices/" + String(DEVICE_ID) + "/status";
-
-  mqttClient.setServer(SERVER_IP, MQTT_PORT);
-  mqttClient.setCallback(mqttCallback);
 
   connectToWiFi();
   connectToMQTT();
@@ -215,7 +226,7 @@ void fetchHardwareConfig() {
   HTTPClient http;
   String url = serverBaseUrl + "/config";
 
-  http.begin(url);
+  initHttpClient(http, url);
   http.addHeader("X-Device-Token", DEVICE_TOKEN);
 
   int httpCode = http.GET();
@@ -329,7 +340,8 @@ void sendSensorTelemetry() {
     mqttClient.publish(mqttTelemetryTopic.c_str(), jsonPayload.c_str());
   } else {
     HTTPClient http;
-    http.begin(serverBaseUrl + "/data");
+    String url = serverBaseUrl + "/data";
+    initHttpClient(http, url);
     http.addHeader("Content-Type", "application/json");
     http.addHeader("X-Device-Token", DEVICE_TOKEN);
 
@@ -345,7 +357,8 @@ void pollAndExecuteCommands() {
   if (WiFi.status() != WL_CONNECTED) return;
 
   HTTPClient http;
-  http.begin(serverBaseUrl + "/commands");
+  String url = serverBaseUrl + "/commands";
+  initHttpClient(http, url);
   http.addHeader("X-Device-Token", DEVICE_TOKEN);
 
   if (http.GET() == HTTP_CODE_OK) {
@@ -375,7 +388,8 @@ void pollAndExecuteCommands() {
 
 void sendCommandAck(int commandId) {
   HTTPClient http;
-  http.begin(serverBaseUrl + "/commands/" + String(commandId) + "/ack");
+  String url = serverBaseUrl + "/commands/" + String(commandId) + "/ack";
+  initHttpClient(http, url);
   http.addHeader("Content-Type", "application/json");
   http.addHeader("X-Device-Token", DEVICE_TOKEN);
   http.POST("{}");
@@ -386,7 +400,8 @@ void sendHeartbeat() {
   if (WiFi.status() != WL_CONNECTED) return;
 
   HTTPClient http;
-  http.begin(serverBaseUrl + "/heartbeat");
+  String url = serverBaseUrl + "/heartbeat";
+  initHttpClient(http, url);
   http.addHeader("Content-Type", "application/json");
   http.addHeader("X-Device-Token", DEVICE_TOKEN);
   http.POST("{}");
