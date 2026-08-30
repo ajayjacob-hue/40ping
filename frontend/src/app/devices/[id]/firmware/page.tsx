@@ -44,6 +44,7 @@ export default function FirmwareGeneratorPage() {
   const generateFirmwareCode = () => {
     const token = device?.token || 'YOUR_DEVICE_TOKEN_HERE';
 
+    const backendUrl = getBackendUrl();
     const hasDht = components.some((c) => c.type === 'DHT11');
     const hasUltrasonic = components.some((c) => c.type === 'HC-SR04');
     const hasPir = components.some((c) => c.type === 'PIR');
@@ -61,7 +62,7 @@ export default function FirmwareGeneratorPage() {
     const buttonComp = components.find((c) => c.type === 'PUSH_BUTTON');
 
     // Build Header Includes
-    let includes = `#include <WiFi.h>\n#include <HTTPClient.h>\n#include <PubSubClient.h>\n#include <ArduinoJson.h>`;
+    let includes = `#include <WiFi.h>\n#include <WiFiClientSecure.h>\n#include <HTTPClient.h>\n#include <PubSubClient.h>\n#include <ArduinoJson.h>`;
     if (hasDht) includes += `\n#include <DHT.h>`;
 
     // Build Pin Definitions
@@ -115,7 +116,7 @@ export default function FirmwareGeneratorPage() {
     }
 
     return `/*
- * IoT-to-Web Auto-Generated ESP32 Arduino Sketch (MQTT + HTTP Fallback)
+ * IoT-to-Web Auto-Generated ESP32 Arduino Sketch (Cloud Connected)
  * Device Name: ${device?.name || 'Smart Room'}
  * Device ID:   ${deviceId}
  * Configured Components: ${components.map((c) => c.type).join(', ') || 'Default'}
@@ -128,10 +129,8 @@ ${includes}
 const char* WIFI_SSID     = "${wifiSsid}";
 const char* WIFI_PASSWORD = "${wifiPassword}";
 
-// Server Configuration (Render Domain or Local Laptop IP)
-const char* SERVER_IP     = "${serverIp}";
-const int   SERVER_PORT   = ${serverPort};
-const int   MQTT_PORT     = 1883;
+// Server Configuration (Render Cloud Backend Domain)
+const char* SERVER_URL    = "${backendUrl}";
 
 // Device Credentials
 const char* DEVICE_ID     = "${deviceId}";
@@ -140,6 +139,7 @@ const char* DEVICE_TOKEN  = "${token}";
 ${pinDefs}
 ${sensorInitGlobal}
 WiFiClient espClient;
+WiFiClientSecure secureEspClient;
 PubSubClient mqttClient(espClient);
 
 String serverBaseUrl;
@@ -154,17 +154,28 @@ unsigned long lastHeartbeatTime = 0;
 void connectWiFi();
 void connectMQTT();
 void mqttCallback(char* topic, byte* payload, unsigned int length);
+void initHttpClient(HTTPClient& http, const String& url);
+
+void initHttpClient(HTTPClient& http, const String& url) {
+  if (url.startsWith("https://")) {
+    secureEspClient.setInsecure();
+    http.begin(secureEspClient, url);
+  } else {
+    http.begin(espClient, url);
+  }
+}
 
 void setup() {
   Serial.begin(115200);
 ${setupCode}
-  serverBaseUrl       = "http://" + String(SERVER_IP) + ":" + String(SERVER_PORT) + "/api/device/" + String(DEVICE_ID);
+  String baseUrl = String(SERVER_URL);
+  if (baseUrl.endsWith("/")) {
+    baseUrl.remove(baseUrl.length() - 1);
+  }
+  serverBaseUrl       = baseUrl + "/api/device/" + String(DEVICE_ID);
   mqttTelemetryTopic  = "devices/" + String(DEVICE_ID) + "/telemetry";
   mqttCommandTopic    = "devices/" + String(DEVICE_ID) + "/commands";
   mqttStatusTopic     = "devices/" + String(DEVICE_ID) + "/status";
-
-  mqttClient.setServer(SERVER_IP, MQTT_PORT);
-  mqttClient.setCallback(mqttCallback);
 
   connectWiFi();
   connectMQTT();
@@ -176,24 +187,21 @@ void loop() {
   if (!mqttClient.connected()) {
     connectMQTT();
   } else {
-    mqttClient.loop(); // Process incoming MQTT commands instantly (< 5ms)
+    mqttClient.loop();
   }
 
   unsigned long currentMillis = millis();
 
-  // Fallback HTTP Command Poll Every 100ms if MQTT disconnected
-  if (!mqttClient.connected() && (currentMillis - lastCommandPollTime >= 100)) {
+  if (!mqttClient.connected() && (currentMillis - lastCommandPollTime >= 500)) {
     lastCommandPollTime = currentMillis;
     pollCommands();
   }
 
-  // Send Telemetry Every 2 Seconds
   if (currentMillis - lastTelemetryTime >= 2000) {
     lastTelemetryTime = currentMillis;
     sendTelemetry();
   }
 
-  // Send Heartbeat Every 10 Seconds if MQTT disconnected
   if (!mqttClient.connected() && (currentMillis - lastHeartbeatTime >= 10000)) {
     lastHeartbeatTime = currentMillis;
     sendHeartbeat();
@@ -242,7 +250,8 @@ void connectWiFi() {
 void sendHeartbeat() {
   if (WiFi.status() != WL_CONNECTED) return;
   HTTPClient http;
-  http.begin(serverBaseUrl + "/heartbeat");
+  String url = serverBaseUrl + "/heartbeat";
+  initHttpClient(http, url);
   http.addHeader("Content-Type", "application/json");
   http.addHeader("X-Device-Token", DEVICE_TOKEN);
   http.POST("{}");
@@ -257,7 +266,8 @@ ${telemetryReadCode}
   serializeJson(doc, json);
 
   HTTPClient http;
-  http.begin(serverBaseUrl + "/data");
+  String url = serverBaseUrl + "/data";
+  initHttpClient(http, url);
   http.addHeader("Content-Type", "application/json");
   http.addHeader("X-Device-Token", DEVICE_TOKEN);
   
@@ -271,7 +281,8 @@ ${telemetryReadCode}
 void pollCommands() {
   if (WiFi.status() != WL_CONNECTED) return;
   HTTPClient http;
-  http.begin(serverBaseUrl + "/commands");
+  String url = serverBaseUrl + "/commands";
+  initHttpClient(http, url);
   http.addHeader("X-Device-Token", DEVICE_TOKEN);
 
   if (http.GET() == HTTP_CODE_OK) {
@@ -289,9 +300,9 @@ void pollCommands() {
       pinMode(gpio, OUTPUT);
       digitalWrite(gpio, val == 1 ? HIGH : LOW);
 
-      // Send ACK back to laptop server
       HTTPClient ackHttp;
-      ackHttp.begin(serverBaseUrl + "/commands/" + String(id) + "/ack");
+      String ackUrl = serverBaseUrl + "/commands/" + String(id) + "/ack";
+      initHttpClient(ackHttp, ackUrl);
       ackHttp.addHeader("X-Device-Token", DEVICE_TOKEN);
       ackHttp.POST("{}");
       ackHttp.end();

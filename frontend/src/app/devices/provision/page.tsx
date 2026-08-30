@@ -150,12 +150,13 @@ export default function ProvisioningWizardPage() {
     const token = selectedDevice?.token || 'YOUR_DEVICE_TOKEN_HERE';
 
     return `/*
- * IoT-to-Web Auto-Generated ESP32 Arduino Sketch
+ * IoT-to-Web Auto-Generated ESP32 Arduino Sketch (Cloud Connected)
  * Device ID: ${selectedDeviceId || 'ESP32-A7F92'}
- * Server IP: ${serverIp}:${serverPort}
+ * Server URL: ${backendUrl}
  */
 
 #include <WiFi.h>
+#include <WiFiClientSecure.h>
 #include <HTTPClient.h>
 #include <PubSubClient.h>
 #include <ArduinoJson.h>
@@ -163,16 +164,17 @@ export default function ProvisioningWizardPage() {
 const char* WIFI_SSID     = "${wifiSsid}";
 const char* WIFI_PASSWORD = "${wifiPassword}";
 
-const char* SERVER_IP     = "${serverIp}";
-const int   SERVER_PORT   = ${serverPort};
-const int   MQTT_PORT     = 1883;
+// Server Configuration (Render Cloud Backend Domain)
+const char* SERVER_URL    = "${backendUrl}";
 
 const char* DEVICE_ID     = "${selectedDeviceId || 'ESP32-A7F92'}";
 const char* DEVICE_TOKEN  = "${token}";
 
 WiFiClient espClient;
+WiFiClientSecure secureEspClient;
 PubSubClient mqttClient(espClient);
 
+String serverBaseUrl;
 String mqttTelemetryTopic;
 String mqttCommandTopic;
 String mqttStatusTopic;
@@ -198,13 +200,27 @@ void connectMQTT() {
   }
 }
 
+void initHttpClient(HTTPClient& http, const String& url) {
+  if (url.startsWith("https://")) {
+    secureEspClient.setInsecure();
+    http.begin(secureEspClient, url);
+  } else {
+    http.begin(espClient, url);
+  }
+}
+
 void setup() {
   Serial.begin(115200);
+
+  String baseUrl = String(SERVER_URL);
+  if (baseUrl.endsWith("/")) {
+    baseUrl.remove(baseUrl.length() - 1);
+  }
+  serverBaseUrl       = baseUrl + "/api/device/" + String(DEVICE_ID);
   mqttTelemetryTopic = "devices/" + String(DEVICE_ID) + "/telemetry";
   mqttCommandTopic   = "devices/" + String(DEVICE_ID) + "/commands";
   mqttStatusTopic    = "devices/" + String(DEVICE_ID) + "/status";
 
-  mqttClient.setServer(SERVER_IP, MQTT_PORT);
   connectWiFi();
   connectMQTT();
 }
@@ -220,7 +236,18 @@ void loop() {
     doc["status"] = "online";
     String payload;
     serializeJson(doc, payload);
-    mqttClient.publish(mqttTelemetryTopic.c_str(), payload.c_str());
+    
+    if (mqttClient.connected()) {
+      mqttClient.publish(mqttTelemetryTopic.c_str(), payload.c_str());
+    } else {
+      HTTPClient http;
+      String url = serverBaseUrl + "/data";
+      initHttpClient(http, url);
+      http.addHeader("Content-Type", "application/json");
+      http.addHeader("X-Device-Token", DEVICE_TOKEN);
+      http.POST(payload);
+      http.end();
+    }
   }
   delay(10);
 }`;
