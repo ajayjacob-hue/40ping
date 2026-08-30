@@ -183,10 +183,29 @@ export default function TelemetryPage() {
     };
   }, [filteredReadings]);
 
-  // SVG Chart Curve Generator
+  const availableMetrics = useMemo(() => {
+    const set = new Set<string>();
+    readings.forEach((r) => {
+      if (r.reading_type) set.add(r.reading_type.toLowerCase());
+    });
+    return Array.from(set);
+  }, [readings]);
+
+  // SVG Chart Curve Generator - filters to specific metric so trend line is 100% accurate
   const chartPath = useMemo(() => {
-    const list = [...filteredReadings].reverse();
-    if (list.length < 2) return { path: '', area: '' };
+    const targetMetric = selectedMetric !== 'ALL' 
+      ? selectedMetric.toLowerCase() 
+      : (availableMetrics.find((m) => m !== 'status' && m !== 'uptime_sec') || availableMetrics[0] || 'temperature');
+
+    const list = [...readings]
+      .filter((r) => {
+        if (selectedDevice !== 'ALL' && r.device_id !== selectedDevice) return false;
+        return r.reading_type.toLowerCase() === targetMetric;
+      })
+      .reverse();
+
+    if (list.length < 2) return { path: '', area: '', metricName: targetMetric, pointsCount: list.length };
+
     const width = 800;
     const height = 180;
     const vals = list.map((r) => Number(r.value) || 0);
@@ -202,8 +221,8 @@ export default function TelemetryPage() {
 
     const path = `M ${points.join(' L ')}`;
     const area = `${path} L ${width},${height} L 0,${height} Z`;
-    return { path, area };
-  }, [filteredReadings]);
+    return { path, area, metricName: targetMetric, pointsCount: list.length };
+  }, [readings, selectedDevice, selectedMetric, availableMetrics]);
 
   // CSV Export Handler
   const exportCsv = () => {
@@ -302,7 +321,9 @@ export default function TelemetryPage() {
         <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 border-b border-zinc-800 pb-3">
           <div className="flex items-center space-x-2">
             <BarChart3 className="h-4 w-4 text-blue-400" />
-            <h2 className="text-sm font-bold text-zinc-100">Historical & Live Telemetry Curve</h2>
+            <h2 className="text-sm font-bold text-zinc-100">
+              Historical & Live <span className="text-blue-400 capitalize">{chartPath.metricName}</span> Trend Curve
+            </h2>
           </div>
 
           <div className="flex flex-wrap items-center gap-3 text-xs">

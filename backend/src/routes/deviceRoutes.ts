@@ -275,10 +275,14 @@ export function createDeviceManagementRouter(io: SocketIOServer): Router {
         [id, 'MANUAL_COMMAND_SENT', `Manual control: Set GPIO ${gpio_pin} to ${value}`]
       );
 
-      // Instantly push command over MQTT if active broker available
-      const broker = getMqttBroker();
-      if (broker) {
-        broker.publishCommand(id, Number(gpio_pin), Number(value), cmd.id);
+      // Instantly push command over MQTT if active broker available (wrapped safely in try/catch)
+      try {
+        const broker = getMqttBroker();
+        if (broker) {
+          broker.publishCommand(id, Number(gpio_pin), Number(value), cmd.id);
+        }
+      } catch (mqttErr) {
+        console.warn('MQTT command publish warning (non-fatal):', mqttErr);
       }
 
       io.emit('command_created', cmd);

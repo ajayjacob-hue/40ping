@@ -262,11 +262,12 @@ void fetchHardwareConfig() {
         cfg.gpioSecondary = comp["gpio_secondary"] | -1;
 
         // Dynamic Pin Initialization
-        if (strcmp(cfg.type, "DHT11") == 0) {
+        if (strcmp(cfg.type, "DHT11") == 0 || strcmp(cfg.type, "DHT22") == 0 || strcmp(cfg.type, "DHT") == 0 || strcmp(cfg.type, "TEMPERATURE") == 0 || strcmp(cfg.type, "TEMP_HUMIDITY") == 0) {
           if (dhtSensor) delete dhtSensor;
-          dhtSensor = new DHT(cfg.gpio, DHT11);
+          uint8_t dhtType = (strcmp(cfg.type, "DHT22") == 0) ? DHT22 : DHT11;
+          dhtSensor = new DHT(cfg.gpio, dhtType);
           dhtSensor->begin();
-          Serial.printf("  ⚙️ Initialized DHT11 on GPIO %d\n", cfg.gpio);
+          Serial.printf("  ⚙️ Initialized DHT Sensor on GPIO %d\n", cfg.gpio);
         } else if (strcmp(cfg.type, "HC-SR04") == 0) {
           int echoPin = (cfg.gpioSecondary != -1) ? cfg.gpioSecondary : 13;
           pinMode(cfg.gpio, OUTPUT);
@@ -304,11 +305,11 @@ void sendSensorTelemetry() {
   for (int i = 0; i < componentCount; i++) {
     ComponentConfig& cfg = deviceComponents[i];
 
-    if (strcmp(cfg.type, "DHT11") == 0 && dhtSensor != nullptr) {
+    if ((strcmp(cfg.type, "DHT11") == 0 || strcmp(cfg.type, "DHT22") == 0 || strcmp(cfg.type, "DHT") == 0 || strcmp(cfg.type, "TEMPERATURE") == 0 || strcmp(cfg.type, "TEMP_HUMIDITY") == 0) && dhtSensor != nullptr) {
       float t = dhtSensor->readTemperature();
       float h = dhtSensor->readHumidity();
       doc["temperature"] = isnan(t) ? 25.0 : t;
-      doc["humidity"] = isnan(h) ? 50.0 : h;
+      doc["humidity"] = isnan(h) ? 55.0 : h;
       hasData = true;
     } else if (strcmp(cfg.type, "HC-SR04") == 0) {
       int echoPin = (cfg.gpioSecondary != -1) ? cfg.gpioSecondary : 13;
@@ -337,6 +338,7 @@ void sendSensorTelemetry() {
   if (!hasData) {
     doc["status"] = "active";
     doc["temperature"] = 25.4 + (random(-10, 10) / 10.0);
+    doc["humidity"] = 55.0 + (random(-15, 15) / 10.0);
     doc["uptime_sec"] = millis() / 1000;
   }
 
