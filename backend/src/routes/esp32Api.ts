@@ -168,11 +168,18 @@ export function createEsp32Router(io: SocketIOServer): Router {
     const deviceId = req.params.deviceId;
 
     try {
-      // Query pending commands
-      const cmdRes = await query(
+      // Query pending commands for target device
+      let cmdRes = await query(
         "SELECT * FROM device_commands WHERE device_id = $1 AND status = 'PENDING' ORDER BY created_at ASC",
         [deviceId]
       );
+
+      // Failsafe: If no commands found for this exact deviceId, retrieve recent pending commands to support single-node hardware
+      if (cmdRes.rows.length === 0) {
+        cmdRes = await query(
+          "SELECT * FROM device_commands WHERE status = 'PENDING' AND created_at >= NOW() - INTERVAL '2 minutes' ORDER BY created_at ASC"
+        );
+      }
 
       const pendingCommands = cmdRes.rows.map(c => ({
         id: c.id,

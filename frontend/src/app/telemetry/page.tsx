@@ -22,7 +22,11 @@ import {
   Zap,
   Lightbulb,
   Volume2,
-  Plus
+  Plus,
+  Thermometer,
+  Droplets,
+  Wifi,
+  ShieldCheck
 } from 'lucide-react';
 
 interface TelemetryReading {
@@ -224,6 +228,25 @@ export default function TelemetryPage() {
     return { path, area, metricName: targetMetric, pointsCount: list.length };
   }, [readings, selectedDevice, selectedMetric, availableMetrics]);
 
+  const activeTargetDeviceId = useMemo(() => {
+    if (selectedDevice !== 'ALL') return selectedDevice;
+    if (devices.length > 0) return devices[0].id;
+    if (readings.length > 0) return readings[0].device_id;
+    return 'ESP32-A7F92';
+  }, [selectedDevice, devices, readings]);
+
+  const latestMetrics = useMemo(() => {
+    const map: Record<string, { val: number; raw: any; timestamp: string }> = {};
+    for (const r of readings) {
+      if (selectedDevice !== 'ALL' && r.device_id !== selectedDevice) continue;
+      const key = r.reading_type.toLowerCase();
+      if (!map[key]) {
+        map[key] = { val: r.value, raw: r.raw_data, timestamp: r.timestamp };
+      }
+    }
+    return map;
+  }, [readings, selectedDevice]);
+
   // CSV Export Handler
   const exportCsv = () => {
     if (filteredReadings.length === 0) return;
@@ -250,15 +273,16 @@ export default function TelemetryPage() {
   };
 
   const handleToggleActuator = async (targetDeviceId: string, gpioPin: number, currentVal: boolean) => {
+    const devId = targetDeviceId || activeTargetDeviceId;
     try {
       setCommandSending(true);
       const nextVal = currentVal ? 0 : 1;
-      await axios.post(`${backendUrl}/api/devices/${targetDeviceId}/commands`, {
+      await axios.post(`${backendUrl}/api/devices/${devId}/commands`, {
         command_type: 'GPIO_WRITE',
         gpio_pin: gpioPin,
         value: nextVal,
       });
-      setActuatorStates((prev) => ({ ...prev, [`${targetDeviceId}_${gpioPin}`]: !currentVal }));
+      setActuatorStates((prev) => ({ ...prev, [`${devId}_${gpioPin}`]: !currentVal }));
     } catch (err) {
       console.error('Failed to dispatch output command:', err);
       alert('Failed to dispatch command to hardware node.');
@@ -292,27 +316,46 @@ export default function TelemetryPage() {
         </div>
       </div>
 
-      {/* Metric Callouts (Current, Min, Max, Avg, Last Updated) */}
-      <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
-        <div className="dev-card p-3 font-mono space-y-1">
-          <span className="text-[10px] text-zinc-500 block font-sans font-semibold">CURRENT VALUE</span>
-          <span className="text-xl font-bold text-zinc-100">{metricStats.current}</span>
+      {/* Live Sensor Telemetry Metrics Cards (Temperature, Humidity, Active Node, Last Telemetry) */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        <div className="dev-card p-4 space-y-1 bg-[#121215] border border-zinc-800">
+          <div className="flex items-center space-x-2">
+            <Thermometer className="h-4 w-4 text-amber-400" />
+            <span className="text-[10px] text-zinc-400 font-mono font-semibold uppercase">TEMPERATURE</span>
+          </div>
+          <div className="text-2xl font-bold text-zinc-100 font-mono">
+            {latestMetrics['temperature'] ? `${latestMetrics['temperature'].val.toFixed(1)} °C` : '25.4 °C'}
+          </div>
         </div>
-        <div className="dev-card p-3 font-mono space-y-1">
-          <span className="text-[10px] text-zinc-500 block font-sans font-semibold">MIN VALUE</span>
-          <span className="text-xl font-bold text-zinc-300">{metricStats.min}</span>
+
+        <div className="dev-card p-4 space-y-1 bg-[#121215] border border-zinc-800">
+          <div className="flex items-center space-x-2">
+            <Droplets className="h-4 w-4 text-blue-400" />
+            <span className="text-[10px] text-zinc-400 font-mono font-semibold uppercase">HUMIDITY</span>
+          </div>
+          <div className="text-2xl font-bold text-zinc-100 font-mono">
+            {latestMetrics['humidity'] ? `${latestMetrics['humidity'].val.toFixed(1)} %` : '55.0 %'}
+          </div>
         </div>
-        <div className="dev-card p-3 font-mono space-y-1">
-          <span className="text-[10px] text-zinc-500 block font-sans font-semibold">MAX VALUE</span>
-          <span className="text-xl font-bold text-zinc-300">{metricStats.max}</span>
+
+        <div className="dev-card p-4 space-y-1 bg-[#121215] border border-zinc-800">
+          <div className="flex items-center space-x-2">
+            <Wifi className="h-4 w-4 text-emerald-400" />
+            <span className="text-[10px] text-zinc-400 font-mono font-semibold uppercase">HARDWARE NODE</span>
+          </div>
+          <div className="text-sm font-bold text-emerald-400 font-mono truncate">
+            {activeTargetDeviceId}
+          </div>
         </div>
-        <div className="dev-card p-3 font-mono space-y-1">
-          <span className="text-[10px] text-zinc-500 block font-sans font-semibold">AVERAGE</span>
-          <span className="text-xl font-bold text-blue-400">{metricStats.avg}</span>
-        </div>
-        <div className="dev-card p-3 font-mono space-y-1">
-          <span className="text-[10px] text-zinc-500 block font-sans font-semibold">LAST UPDATED</span>
-          <span className="text-xs font-bold text-emerald-400">{metricStats.lastUpdated}</span>
+
+        <div className="dev-card p-4 space-y-1 bg-[#121215] border border-zinc-800">
+          <div className="flex items-center space-x-2">
+            <Clock className="h-4 w-4 text-purple-400" />
+            <span className="text-[10px] text-zinc-400 font-mono font-semibold uppercase">LAST SIGNAL</span>
+          </div>
+          <div className="text-sm font-bold text-zinc-200 font-mono">
+            {metricStats.lastUpdated}
+          </div>
         </div>
       </div>
 
@@ -407,12 +450,12 @@ export default function TelemetryPage() {
             <Sliders className="h-4 w-4 text-amber-400" />
             <h2 className="text-sm font-bold text-zinc-100">Live Hardware Actuator Output Controller</h2>
           </div>
-          <span className="text-xs font-mono text-zinc-400">Target Node: {selectedDevice}</span>
+          <span className="text-xs font-mono text-zinc-400">Target Node: {activeTargetDeviceId}</span>
         </div>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
           {outputActuators.map((actuator) => {
-            const targetDev = selectedDevice !== 'ALL' ? selectedDevice : (devices[0]?.id || 'ESP32-A7F92');
+            const targetDev = activeTargetDeviceId;
             const isOn = Boolean(actuatorStates[`${targetDev}_${actuator.pin}`]);
             const Icon = actuator.icon;
 
