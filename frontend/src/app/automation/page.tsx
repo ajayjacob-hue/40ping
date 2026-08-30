@@ -42,6 +42,7 @@ interface AutomationRule {
   action_component: string;
   action_type: string;
   action_value: number;
+  duration_seconds?: number;
   is_active: boolean;
   created_at: string;
 }
@@ -53,6 +54,7 @@ interface ProposedConfig {
   triggerValue: number;
   actionComponent: string;
   actionValue: number;
+  durationSeconds?: number;
   explanation: string;
   cppConditionCode: string;
   hardwareSummary: string[];
@@ -86,7 +88,6 @@ export default function AutomationPage() {
   // Main Code Live Synchronized Preview State
   const [mainCode, setMainCode] = useState<string>('');
   const [codeCopied, setCodeCopied] = useState(false);
-  const [showCodePanel, setShowCodePanel] = useState(true);
 
   const backendUrl = getBackendUrl();
 
@@ -98,35 +99,44 @@ export default function AutomationPage() {
     { label: '🔘 Button pressed ➔ LED Off', prompt: 'Turn off LED when button is pressed' }
   ];
 
-  const buildMainLoopCode = (activeRules: AutomationRule[]) => {
-    const filtered = activeRules.filter((r) => r.is_active !== false);
+  const buildMainLoopCode = (activeRulesList: AutomationRule[]) => {
+    const filtered = (activeRulesList || []).filter((r) => r.is_active !== false);
     let conditionsCode = '';
     if (filtered.length === 0) {
       conditionsCode = `  // No active smart automations configured yet.\n  // Use the Reka AI Copilot above to automatically inject real-time edge conditions.`;
     } else {
       conditionsCode = filtered
         .map((r, i) => {
-          let op = r.condition === 'GREATER_THAN' ? '>' : r.condition === 'LESS_THAN' ? '<' : '==';
+          const s = String(r.sensor_component || '').toUpperCase();
+          const c = String(r.condition || '').toUpperCase();
+          const trigVal = r.trigger_value ?? 0;
+          const actComp = String(r.action_component || 'LED').toUpperCase();
+          const actVal = Number(r.action_value ?? 1);
+
+          let op = '>';
+          if (c.includes('LESS') || c.includes('BELOW') || c.includes('UNDER') || c === '<') op = '<';
+          else if (c.includes('EQUAL') || c === '==') op = '==';
+
           let check = '';
-          if (r.sensor_component === 'DHT11') check = `temp ${op} ${r.trigger_value}.0`;
-          else if (r.sensor_component === 'PIR') check = `digitalRead(PIR_PIN) == HIGH`;
-          else if (r.sensor_component === 'LDR') check = `analogRead(LDR_PIN) ${op} ${r.trigger_value}`;
-          else if (r.sensor_component === 'HC-SR04') check = `distanceCm ${op} ${r.trigger_value}.0`;
-          else if (r.sensor_component === 'PUSH_BUTTON') check = `digitalRead(BUTTON_PIN) == LOW`;
-          else check = `sensorVal > ${r.trigger_value}`;
+          if (s.includes('DHT') || s.includes('TEMP') || s.includes('HUMID')) check = `temp ${op} ${trigVal}.0`;
+          else if (s.includes('PIR') || s.includes('MOTION')) check = `digitalRead(PIR_PIN) == HIGH`;
+          else if (s.includes('LDR') || s.includes('LIGHT') || s.includes('LUX')) check = `analogRead(LDR_PIN) ${op} ${trigVal}`;
+          else if (s.includes('HC') || s.includes('DISTANCE') || s.includes('SONAR')) check = `distanceCm ${op} ${trigVal}.0`;
+          else if (s.includes('BUTTON')) check = `digitalRead(BUTTON_PIN) == LOW`;
+          else check = `sensorVal > ${trigVal}`;
 
-          const isMomentary = r.sensor_component === 'PIR' || r.sensor_component === 'PUSH_BUTTON';
+          const isMomentary = s.includes('PIR') || s.includes('MOTION') || s.includes('BUTTON');
           const dur = (r as any).duration_seconds || (isMomentary ? 5 : 0);
-          const pinName = `${r.action_component}_PIN`;
-          const timerVar = `timer_${r.action_component.toLowerCase()}`;
+          const pinName = `${actComp}_PIN`;
+          const timerVar = `timer_${actComp.toLowerCase()}`;
 
-          if (r.action_component === 'SERVO') {
-            return `  // Smart Automation Rule ${i + 1}: ${r.name}\n  if (${check}) {\n    servoMotor.write(${r.action_value});\n  }`;
+          if (actComp === 'SERVO') {
+            return `  // Smart Automation Rule ${i + 1}: ${r.name}\n  if (${check}) {\n    servoMotor.write(${actVal});\n  }`;
           } else if (dur > 0) {
             return `  // Smart Automation Rule ${i + 1}: ${r.name} (${dur}s Timed Pulse)\n  if (${check}) {\n    ${timerVar} = millis() + ${dur * 1000}; // Keep ON for ${dur}s\n    digitalWrite(${pinName}, HIGH);\n  } else if (millis() > ${timerVar}) {\n    digitalWrite(${pinName}, LOW);  // Auto-off after ${dur}s\n  }`;
           } else {
-            const onState = Number(r.action_value) === 1 ? 'HIGH' : 'LOW';
-            const offState = Number(r.action_value) === 1 ? 'LOW' : 'HIGH';
+            const onState = actVal === 1 ? 'HIGH' : 'LOW';
+            const offState = actVal === 1 ? 'LOW' : 'HIGH';
             return `  // Smart Automation Rule ${i + 1}: ${r.name} (Auto-reset)\n  if (${check}) {\n    digitalWrite(${pinName}, ${onState});\n  } else {\n    digitalWrite(${pinName}, ${offState});\n  }`;
           }
         })
@@ -173,7 +183,8 @@ void loop() {
         setMainCode(res.data.mainLoopCode);
       }
     } catch (err) {
-      console.error('Failed to load main loop code:', err);
+      // Fallback to client-side compiler
+      setMainCode(buildMainLoopCode(rules));
     }
   };
 
@@ -185,11 +196,11 @@ void loop() {
         axios.get(`${backendUrl}/api/devices`).catch(() => ({ data: { devices: [] } })),
       ]);
 
-      const fetchedRules = rulesRes.data.rules || [];
+      const fetchedRules = rulesRes.data?.rules || [];
       setRules(fetchedRules);
       setMainCode(buildMainLoopCode(fetchedRules));
 
-      const devList = devRes.data.devices || [];
+      const devList = devRes.data?.devices || [];
       setDevices(devList);
 
       const activeDevId = selectedDevice || (devList.length > 0 ? devList[0].id : '');
@@ -242,13 +253,12 @@ void loop() {
   // Toggle Active State
   const handleToggle = async (ruleId: number, currentStatus: boolean) => {
     try {
-      setRules((prev) =>
-        prev.map((r) => (r.id === ruleId ? { ...r, is_active: !currentStatus } : r))
-      );
+      const updated = rules.map((r) => (r.id === ruleId ? { ...r, is_active: !currentStatus } : r));
+      setRules(updated);
+      setMainCode(buildMainLoopCode(updated));
       await axios.patch(`${backendUrl}/api/automations/${ruleId}/toggle`, {
         is_active: !currentStatus,
       });
-      if (selectedDevice) fetchMainLoopCode(selectedDevice);
     } catch (err) {
       console.error('Failed to toggle rule:', err);
       fetchData(false);
@@ -258,9 +268,10 @@ void loop() {
   // Delete Rule
   const handleDelete = async (ruleId: number) => {
     try {
-      setRules((prev) => prev.filter((r) => r.id !== ruleId));
+      const updated = rules.filter((r) => r.id !== ruleId);
+      setRules(updated);
+      setMainCode(buildMainLoopCode(updated));
       await axios.delete(`${backendUrl}/api/automations/${ruleId}`);
-      if (selectedDevice) fetchMainLoopCode(selectedDevice);
     } catch (err) {
       console.error('Failed to delete rule:', err);
       fetchData(false);
@@ -270,11 +281,11 @@ void loop() {
   // Create Visual Rule
   const handleCreateRule = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!selectedDevice) return;
+    const devId = selectedDevice || (devices[0]?.id || 'ESP32-AUTO');
 
     try {
       setSubmitting(true);
-      await axios.post(`${backendUrl}/api/devices/${selectedDevice}/automations`, {
+      const res = await axios.post(`${backendUrl}/api/devices/${devId}/automations`, {
         name: ruleName || `IF ${sensorComp} ${condition} ${triggerValue} ➔ SET ${actionComp} = ${actionValue}`,
         sensor_component: sensorComp,
         condition,
@@ -283,6 +294,24 @@ void loop() {
         action_type: 'GPIO_WRITE',
         action_value: actionValue,
       });
+
+      const newRule: AutomationRule = res.data?.rule || {
+        id: Date.now(),
+        device_id: devId,
+        name: ruleName || `IF ${sensorComp} ${condition} ${triggerValue} ➔ ${actionComp} = ${actionValue}`,
+        sensor_component: sensorComp,
+        condition,
+        trigger_value: triggerValue,
+        action_component: actionComp,
+        action_type: 'GPIO_WRITE',
+        action_value: actionValue,
+        is_active: true,
+        created_at: new Date().toISOString(),
+      };
+
+      const updatedRules = [newRule, ...rules];
+      setRules(updatedRules);
+      setMainCode(buildMainLoopCode(updatedRules));
 
       setShowModal(false);
       setRuleName('');
@@ -314,15 +343,48 @@ void loop() {
 
       const parsed = res.data;
       if (parsed.success && parsed.rule) {
+        let ruleToStore = parsed.appliedRule;
+        if (!ruleToStore) {
+          try {
+            const saveRes = await axios.post(`${backendUrl}/api/devices/${devId}/automations`, {
+              name: parsed.rule.name,
+              sensor_component: parsed.rule.sensor_component,
+              condition: parsed.rule.condition,
+              trigger_value: parsed.rule.trigger_value,
+              action_component: parsed.rule.action_component,
+              action_type: parsed.rule.action_type || 'GPIO_WRITE',
+              action_value: parsed.rule.action_value,
+            });
+            ruleToStore = saveRes.data?.rule;
+          } catch (e) {
+            console.warn('Auto-save notice:', e);
+          }
+        }
+
+        const newRule: AutomationRule = ruleToStore || {
+          id: Date.now(),
+          device_id: devId,
+          name: parsed.rule.name,
+          sensor_component: parsed.rule.sensor_component,
+          condition: parsed.rule.condition,
+          trigger_value: parsed.rule.trigger_value,
+          action_component: parsed.rule.action_component,
+          action_type: parsed.rule.action_type || 'GPIO_WRITE',
+          action_value: parsed.rule.action_value,
+          duration_seconds: parsed.rule.duration_seconds || 5,
+          is_active: true,
+          created_at: new Date().toISOString(),
+        };
+
+        const updatedRules = [newRule, ...rules.filter((r) => r.id !== newRule.id)];
+        setRules(updatedRules);
+        setMainCode(buildMainLoopCode(updatedRules));
+
         setAiMessage({
           type: 'success',
           text: `✨ Reka AI understood prompt & automatically updated main code!`,
-          details: `Rule: "${parsed.rule.name}" ➔ Condition injected into ESP32 evaluateLocalAutomations() loop.`,
+          details: `Rule: "${parsed.rule.name}" ➔ Injected into ESP32 evaluateLocalAutomations() loop.`,
         });
-
-        if (parsed.updated_main_code) {
-          setMainCode(parsed.updated_main_code);
-        }
 
         setAiPrompt('');
         fetchData(false);
@@ -363,6 +425,7 @@ void loop() {
           triggerValue: parsed.rule.trigger_value,
           actionComponent: parsed.rule.action_component,
           actionValue: parsed.rule.action_value,
+          durationSeconds: parsed.rule.duration_seconds,
           explanation: parsed.explanation,
           cppConditionCode: parsed.cpp_condition_code,
           hardwareSummary: [
@@ -388,7 +451,7 @@ void loop() {
 
     try {
       setAiLoading(true);
-      await axios.post(`${backendUrl}/api/devices/${devId}/automations`, {
+      const res = await axios.post(`${backendUrl}/api/devices/${devId}/automations`, {
         name: proposedConfig.ruleName,
         sensor_component: proposedConfig.sensorComponent,
         condition: proposedConfig.condition,
@@ -397,6 +460,25 @@ void loop() {
         action_type: 'GPIO_WRITE',
         action_value: proposedConfig.actionValue,
       });
+
+      const newRule: AutomationRule = res.data?.rule || {
+        id: Date.now(),
+        device_id: devId,
+        name: proposedConfig.ruleName,
+        sensor_component: proposedConfig.sensorComponent,
+        condition: proposedConfig.condition,
+        trigger_value: proposedConfig.triggerValue,
+        action_component: proposedConfig.actionComponent,
+        action_type: 'GPIO_WRITE',
+        action_value: proposedConfig.actionValue,
+        duration_seconds: proposedConfig.durationSeconds || 5,
+        is_active: true,
+        created_at: new Date().toISOString(),
+      };
+
+      const updatedRules = [newRule, ...rules.filter((r) => r.id !== newRule.id)];
+      setRules(updatedRules);
+      setMainCode(buildMainLoopCode(updatedRules));
 
       setAiMessage({
         type: 'success',
@@ -677,7 +759,7 @@ void loop() {
 
         <div className="p-4 bg-zinc-950 overflow-x-auto max-h-72 font-mono text-[11.5px] leading-relaxed text-zinc-300">
           <pre className="text-emerald-400 whitespace-pre">
-            {mainCode || '// Loading live main firmware code...'}
+            {mainCode || buildMainLoopCode(rules)}
           </pre>
         </div>
       </div>
