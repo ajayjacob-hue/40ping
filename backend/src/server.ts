@@ -81,6 +81,7 @@ const esp32Router = createEsp32Router(io);
 const deviceMgmtRouter = createDeviceManagementRouter(io);
 
 app.use('/api/device', esp32Router);
+app.use('/api/devices', esp32Router);
 app.use('/api', deviceMgmtRouter);
 
 // Base Health & Info Endpoint
