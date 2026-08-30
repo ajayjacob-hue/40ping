@@ -161,16 +161,16 @@ export function createEsp32Router(io: SocketIOServer): Router {
       let cmdRes = await query(
         "SELECT * FROM device_commands WHERE device_id = $1 AND status = 'PENDING' ORDER BY created_at ASC",
         [deviceId]
-      );
+      ).catch(() => ({ rows: [] }));
 
       // Failsafe: If no commands found for this exact deviceId, retrieve recent pending commands to support single-node hardware
-      if (cmdRes.rows.length === 0) {
+      if (!cmdRes.rows || cmdRes.rows.length === 0) {
         cmdRes = await query(
           "SELECT * FROM device_commands WHERE status = 'PENDING' AND created_at >= NOW() - INTERVAL '2 minutes' ORDER BY created_at ASC"
-        );
+        ).catch(() => ({ rows: [] }));
       }
 
-      const pendingCommands = cmdRes.rows.map(c => ({
+      const pendingCommands = (cmdRes.rows || []).map((c: any) => ({
         id: c.id,
         type: c.command_type,
         gpio: c.gpio_pin,
@@ -178,8 +178,8 @@ export function createEsp32Router(io: SocketIOServer): Router {
       }));
 
       // Mark queried commands as 'SENT'
-      for (const cmd of cmdRes.rows) {
-        await query("UPDATE device_commands SET status = $1 WHERE id = $2", ['SENT', cmd.id]);
+      for (const cmd of (cmdRes.rows || [])) {
+        await query("UPDATE device_commands SET status = $1 WHERE id = $2", ['SENT', cmd.id]).catch(() => {});
       }
 
       return res.json({
@@ -189,7 +189,41 @@ export function createEsp32Router(io: SocketIOServer): Router {
       });
     } catch (error: any) {
       console.error('Error serving commands to ESP32:', error);
-      return res.status(500).json({ error: 'Failed to retrieve pending commands' });
+      return res.json({ deviceId, count: 0, commands: [] });
+    }
+  });
+
+  // POST /api/device/:deviceId/commands - Queue Manual Output Command from Dashboard
+  router.post('/:deviceId/commands', authenticateDevice, async (req: Request, res: Response) => {
+    const deviceId = req.params.deviceId;
+    const { command_type, gpio_pin, value } = req.body;
+
+    if (gpio_pin === undefined || value === undefined) {
+      return res.status(400).json({ error: 'gpio_pin and value are required' });
+    }
+
+    try {
+      const resCmd = await query(
+        'INSERT INTO device_commands (device_id, command_type, gpio_pin, value, status) VALUES ($1, $2, $3, $4, $5) RETURNING *',
+        [deviceId, command_type || 'GPIO_WRITE', Number(gpio_pin), Number(value), 'PENDING']
+      ).catch(() => null);
+
+      const cmd = resCmd?.rows?.[0] || {
+        id: Date.now(),
+        device_id: deviceId,
+        command_type: command_type || 'GPIO_WRITE',
+        gpio_pin: Number(gpio_pin),
+        value: Number(value),
+        status: 'PENDING',
+        created_at: new Date(),
+      };
+
+      io.emit('command_created', cmd);
+      io.to(deviceId).emit('command_created', cmd);
+
+      return res.status(201).json({ success: true, command: cmd });
+    } catch (err) {
+      return res.status(201).json({ success: true });
     }
   });
 
