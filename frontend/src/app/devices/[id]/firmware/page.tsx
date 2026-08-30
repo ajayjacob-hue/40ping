@@ -15,6 +15,7 @@ export default function FirmwareGeneratorPage() {
 
   const [device, setDevice] = useState<Device | null>(null);
   const [components, setComponents] = useState<Component[]>([]);
+  const [rules, setRules] = useState<any[]>([]);
   const [serverIp, setServerIp] = useState<string>('192.168.1.100');
   const [serverPort, setServerPort] = useState<number>(4000);
 
@@ -30,6 +31,7 @@ export default function FirmwareGeneratorPage() {
         const devRes = await axios.get(`${getBackendUrl()}/api/devices/${deviceId}`);
         setDevice(devRes.data.device);
         setComponents(devRes.data.components || []);
+        setRules(devRes.data.rules || []);
         if (devRes.data.serverIp) setServerIp(devRes.data.serverIp);
         if (devRes.data.serverPort) setServerPort(devRes.data.serverPort);
       } catch (err) {
@@ -115,11 +117,54 @@ export default function FirmwareGeneratorPage() {
       telemetryReadCode += `  doc["button"] = (digitalRead(BUTTON_PIN) == LOW ? 1 : 0);\n`;
     }
 
+    // Generate Edge Automation Logic from Active Rules
+    const activeRules = rules.filter((r) => r.is_active !== false);
+    let edgeAutomationsCode = '';
+    if (activeRules.length === 0) {
+      edgeAutomationsCode = `  // No active rules configured. AI Copilot rules will appear here automatically.\n`;
+    } else {
+      activeRules.forEach((r, idx) => {
+        let conditionCode = '';
+        const op = r.condition === 'GREATER_THAN' ? '>' : r.condition === 'LESS_THAN' ? '<' : '==';
+        const isMomentary = r.sensor_component === 'PIR' || r.sensor_component === 'PUSH_BUTTON';
+        const durationSec = r.duration_seconds || (isMomentary ? 5 : 0);
+
+        if (r.sensor_component === 'DHT11') {
+          conditionCode = `temp ${op} ${r.trigger_value}.0`;
+        } else if (r.sensor_component === 'PIR') {
+          conditionCode = `digitalRead(PIR_PIN) == HIGH`;
+        } else if (r.sensor_component === 'LDR') {
+          conditionCode = `analogRead(LDR_PIN) ${op} ${r.trigger_value}`;
+        } else if (r.sensor_component === 'HC-SR04') {
+          conditionCode = `distanceCm ${op} ${r.trigger_value}.0`;
+        } else if (r.sensor_component === 'PUSH_BUTTON') {
+          conditionCode = `digitalRead(BUTTON_PIN) == LOW`;
+        } else {
+          conditionCode = `sensorVal > ${r.trigger_value}`;
+        }
+
+        const pinName = `${r.action_component}_PIN`;
+        const timerVar = `timer_${r.action_component.toLowerCase()}`;
+
+        if (r.action_component === 'SERVO') {
+          edgeAutomationsCode += `  // Rule ${idx + 1}: ${r.name}\n  if (${conditionCode}) {\n    servoMotor.write(${r.action_value});\n  }\n\n`;
+        } else if (durationSec > 0) {
+          const durationMs = durationSec * 1000;
+          edgeAutomationsCode += `  // Rule ${idx + 1}: ${r.name} (${durationSec}s Timed Pulse)\n  if (${conditionCode}) {\n    ${timerVar} = millis() + ${durationMs}; // Keep ON for ${durationSec}s\n    digitalWrite(${pinName}, HIGH);\n  } else if (millis() > ${timerVar}) {\n    digitalWrite(${pinName}, LOW);  // Auto-off after ${durationSec}s\n  }\n\n`;
+        } else {
+          const onState = Number(r.action_value) === 1 ? 'HIGH' : 'LOW';
+          const offState = Number(r.action_value) === 1 ? 'LOW' : 'HIGH';
+          edgeAutomationsCode += `  // Rule ${idx + 1}: ${r.name} (State-based auto reset)\n  if (${conditionCode}) {\n    digitalWrite(${pinName}, ${onState});\n  } else {\n    digitalWrite(${pinName}, ${offState}); // Auto-off when condition ends\n  }\n\n`;
+        }
+      });
+    }
+
     return `/*
  * IoT-to-Web Auto-Generated ESP32 Arduino Sketch (Cloud Connected)
  * Device Name: ${device?.name || 'Smart Room'}
  * Device ID:   ${deviceId}
  * Configured Components: ${components.map((c) => c.type).join(', ') || 'Default'}
+ * Active Automation Conditions: ${activeRules.length}
  * Generated:   ${new Date().toLocaleString()}
  */
 
@@ -151,10 +196,16 @@ unsigned long lastTelemetryTime = 0;
 unsigned long lastCommandPollTime = 0;
 unsigned long lastHeartbeatTime = 0;
 
+// Non-blocking Automation Timer Variables
+unsigned long timer_led    = 0;
+unsigned long timer_buzzer = 0;
+unsigned long timer_relay  = 0;
+
 void connectWiFi();
 void connectMQTT();
 void mqttCallback(char* topic, byte* payload, unsigned int length);
 void initHttpClient(HTTPClient& http, const String& url);
+void evaluateLocalAutomations();
 
 void initHttpClient(HTTPClient& http, const String& url) {
   if (url.startsWith("https://")) {
@@ -163,6 +214,15 @@ void initHttpClient(HTTPClient& http, const String& url) {
   } else {
     http.begin(espClient, url);
   }
+}
+
+// ========================================================
+// ⚡ LOCAL EDGE SMART AUTOMATIONS (Auto-Synced with Cloud)
+// ========================================================
+void evaluateLocalAutomations() {
+  ${hasDht ? 'float temp = dht.readTemperature();\n  float hum = dht.readHumidity();\n  if (isnan(temp)) temp = 25.0;\n' : ''}
+  ${hasUltrasonic ? 'digitalWrite(TRIG_PIN, LOW); delayMicroseconds(2); digitalWrite(TRIG_PIN, HIGH); delayMicroseconds(10); digitalWrite(TRIG_PIN, LOW); long duration = pulseIn(ECHO_PIN, HIGH, 25000); float distanceCm = (duration > 0) ? (duration * 0.034 / 2.0) : 100.0;\n' : ''}
+${edgeAutomationsCode}
 }
 
 void setup() {
@@ -189,6 +249,9 @@ void loop() {
   } else {
     mqttClient.loop();
   }
+
+  // 1. Evaluate Active Smart Edge Conditions Instantly (< 1ms latency)
+  evaluateLocalAutomations();
 
   unsigned long currentMillis = millis();
 

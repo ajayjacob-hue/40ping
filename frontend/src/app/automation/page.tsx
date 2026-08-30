@@ -7,6 +7,7 @@ import { getBackendUrl, Device } from '@/lib/api';
 import Button from '@/components/ui/Button';
 import Badge from '@/components/ui/Badge';
 import EmptyState from '@/components/ui/EmptyState';
+import Link from 'next/link';
 import {
   Zap,
   Plus,
@@ -20,7 +21,14 @@ import {
   X,
   ArrowRight,
   ShieldCheck,
-  AlertCircle
+  AlertCircle,
+  Code2,
+  Copy,
+  Terminal,
+  Bot,
+  Flame,
+  ArrowUpRight,
+  Download
 } from 'lucide-react';
 
 interface AutomationRule {
@@ -45,6 +53,8 @@ interface ProposedConfig {
   triggerValue: number;
   actionComponent: string;
   actionValue: number;
+  explanation: string;
+  cppConditionCode: string;
   hardwareSummary: string[];
 }
 
@@ -65,14 +75,40 @@ export default function AutomationPage() {
   const [actionValue, setActionValue] = useState<number>(1);
   const [submitting, setSubmitting] = useState(false);
 
-  // Copilot AI Assistant State
+  // Copilot AI Assistant State (Powered by Reka AI)
   const [aiPrompt, setAiPrompt] = useState('');
   const [aiLoading, setAiLoading] = useState(false);
+  const [autoApplying, setAutoApplying] = useState(false);
   const [proposedConfig, setProposedConfig] = useState<ProposedConfig | null>(null);
-  const [aiMessage, setAiMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const [aiMessage, setAiMessage] = useState<{ type: 'success' | 'error'; text: string; details?: string } | null>(null);
   const [triggerAlert, setTriggerAlert] = useState<string | null>(null);
 
+  // Main Code Live Synchronized Preview State
+  const [mainCode, setMainCode] = useState<string>('');
+  const [codeCopied, setCodeCopied] = useState(false);
+  const [showCodePanel, setShowCodePanel] = useState(true);
+
   const backendUrl = getBackendUrl();
+
+  const QUICK_PROMPTS = [
+    { label: '🔥 LED if Temp > 32°C', prompt: 'Turn on LED if temperature exceeds 32 degrees' },
+    { label: '🚨 Buzzer on Motion', prompt: 'Sound the buzzer alarm when motion is detected' },
+    { label: '🚪 Servo 90° on Proximity', prompt: 'Rotate servo to 90 degrees if distance is less than 20cm' },
+    { label: '💡 Relay when Dark', prompt: 'If light level drops below 300 turn on relay' },
+    { label: '🔘 Button pressed ➔ LED Off', prompt: 'Turn off LED when button is pressed' }
+  ];
+
+  const fetchMainLoopCode = async (devId: string) => {
+    if (!devId) return;
+    try {
+      const res = await axios.get(`${backendUrl}/api/devices/${devId}/firmware/main-loop`);
+      if (res.data?.mainLoopCode) {
+        setMainCode(res.data.mainLoopCode);
+      }
+    } catch (err) {
+      console.error('Failed to load main loop code:', err);
+    }
+  };
 
   const fetchData = async (isInitial = false) => {
     try {
@@ -82,11 +118,18 @@ export default function AutomationPage() {
         axios.get(`${backendUrl}/api/devices`),
       ]);
 
-      setRules(rulesRes.data.rules || []);
+      const fetchedRules = rulesRes.data.rules || [];
+      setRules(fetchedRules);
       const devList = devRes.data.devices || [];
       setDevices(devList);
+
+      const activeDevId = selectedDevice || (devList.length > 0 ? devList[0].id : '');
       if (devList.length > 0 && !selectedDevice) {
         setSelectedDevice(devList[0].id);
+      }
+
+      if (activeDevId) {
+        fetchMainLoopCode(activeDevId);
       }
     } catch (err) {
       console.error('Failed to load automations data:', err);
@@ -106,14 +149,26 @@ export default function AutomationPage() {
       setTimeout(() => setTriggerAlert(null), 5000);
     });
 
-    socket.on('rule_created', () => fetchData(false));
-    socket.on('rule_deleted', () => fetchData(false));
-    socket.on('rule_updated', () => fetchData(false));
+    socket.on('rule_created', () => {
+      fetchData(false);
+    });
+    socket.on('rule_deleted', () => {
+      fetchData(false);
+    });
+    socket.on('rule_updated', () => {
+      fetchData(false);
+    });
 
     return () => {
       socket.disconnect();
     };
   }, [backendUrl]);
+
+  useEffect(() => {
+    if (selectedDevice) {
+      fetchMainLoopCode(selectedDevice);
+    }
+  }, [selectedDevice]);
 
   // Toggle Active State
   const handleToggle = async (ruleId: number, currentStatus: boolean) => {
@@ -124,6 +179,7 @@ export default function AutomationPage() {
       await axios.patch(`${backendUrl}/api/automations/${ruleId}/toggle`, {
         is_active: !currentStatus,
       });
+      if (selectedDevice) fetchMainLoopCode(selectedDevice);
     } catch (err) {
       console.error('Failed to toggle rule:', err);
       fetchData(false);
@@ -135,6 +191,7 @@ export default function AutomationPage() {
     try {
       setRules((prev) => prev.filter((r) => r.id !== ruleId));
       await axios.delete(`${backendUrl}/api/automations/${ruleId}`);
+      if (selectedDevice) fetchMainLoopCode(selectedDevice);
     } catch (err) {
       console.error('Failed to delete rule:', err);
       fetchData(false);
@@ -168,7 +225,53 @@ export default function AutomationPage() {
     }
   };
 
-  // Step 1: AI Copilot - Generate Proposed Configuration Review
+  // Reka AI: 1-Click "Understand & Auto-Update Main Code"
+  const handleAiAutoApply = async (customPrompt?: string) => {
+    const promptToUse = customPrompt || aiPrompt;
+    if (!promptToUse.trim()) return;
+
+    try {
+      setAutoApplying(true);
+      setAiMessage(null);
+      setProposedConfig(null);
+
+      const devId = selectedDevice || (devices[0]?.id || '');
+      if (!devId) {
+        setAiMessage({ type: 'error', text: 'Please register or select an ESP32 hardware device first.' });
+        return;
+      }
+
+      const res = await axios.post(`${backendUrl}/api/copilot/parse`, {
+        prompt: promptToUse,
+        deviceId: devId,
+        autoApply: true,
+      });
+
+      const parsed = res.data;
+      if (parsed.success && parsed.rule) {
+        setAiMessage({
+          type: 'success',
+          text: `✨ Reka AI understood prompt & automatically updated main code!`,
+          details: `Rule: "${parsed.rule.name}" ➔ Condition injected into ESP32 evaluateLocalAutomations() loop.`,
+        });
+
+        if (parsed.updated_main_code) {
+          setMainCode(parsed.updated_main_code);
+        }
+
+        setAiPrompt('');
+        fetchData(false);
+      } else {
+        setAiMessage({ type: 'error', text: parsed.error || 'Could not understand rule condition from input prompt.' });
+      }
+    } catch (err: any) {
+      setAiMessage({ type: 'error', text: 'AI processing failed.', details: err.message });
+    } finally {
+      setAutoApplying(false);
+    }
+  };
+
+  // Reka AI: Review Proposed Configuration before applying
   const handleAiGenerateProposal = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!aiPrompt.trim()) return;
@@ -187,6 +290,7 @@ export default function AutomationPage() {
       const res = await axios.post(`${backendUrl}/api/copilot/parse`, {
         prompt: aiPrompt,
         deviceId: devId,
+        autoApply: false,
       });
 
       const parsed = res.data;
@@ -198,22 +302,25 @@ export default function AutomationPage() {
           triggerValue: parsed.rule.trigger_value,
           actionComponent: parsed.rule.action_component,
           actionValue: parsed.rule.action_value,
+          explanation: parsed.explanation,
+          cppConditionCode: parsed.cpp_condition_code,
           hardwareSummary: [
-            `Sensor Node: ${parsed.rule.sensor_component} (${parsed.rule.condition} ${parsed.rule.trigger_value})`,
-            `Actuator Target: ${parsed.rule.action_component} ➔ Set to ${parsed.rule.action_value === 1 ? 'HIGH' : 'LOW'}`,
+            `Sensor Input: ${parsed.rule.sensor_component} (${parsed.rule.condition} ${parsed.rule.trigger_value})`,
+            `Actuator Output: ${parsed.rule.action_component} ➔ Set to ${parsed.rule.action_value === 1 ? 'HIGH / 1' : 'LOW / 0'}`,
+            `AI Model: ${parsed.provider} (${parsed.modelUsed || 'reka-edge-2603'})`,
           ],
         });
       } else {
         setAiMessage({ type: 'error', text: parsed.error || 'Could not infer rule logic from input prompt.' });
       }
-    } catch (err) {
-      setAiMessage({ type: 'error', text: 'AI Copilot processing failed.' });
+    } catch (err: any) {
+      setAiMessage({ type: 'error', text: 'Reka AI Copilot processing failed.', details: err.message });
     } finally {
       setAiLoading(false);
     }
   };
 
-  // Step 2: Apply Proposed Configuration after user review
+  // Apply Proposed Configuration after user review
   const handleApplyProposedConfig = async () => {
     if (!proposedConfig) return;
     const devId = selectedDevice || (devices[0]?.id || '');
@@ -221,7 +328,7 @@ export default function AutomationPage() {
 
     try {
       setAiLoading(true);
-      await axios.post(`${backendUrl}/api/devices/${devId}/automations`, {
+      const res = await axios.post(`${backendUrl}/api/devices/${devId}/automations`, {
         name: proposedConfig.ruleName,
         sensor_component: proposedConfig.sensorComponent,
         condition: proposedConfig.condition,
@@ -231,7 +338,10 @@ export default function AutomationPage() {
         action_value: proposedConfig.actionValue,
       });
 
-      setAiMessage({ type: 'success', text: `Applied configuration: "${proposedConfig.ruleName}"` });
+      setAiMessage({
+        type: 'success',
+        text: `Applied condition & updated main code: "${proposedConfig.ruleName}"`,
+      });
       setProposedConfig(null);
       setAiPrompt('');
       fetchData(false);
@@ -240,6 +350,13 @@ export default function AutomationPage() {
     } finally {
       setAiLoading(false);
     }
+  };
+
+  const copyCode = () => {
+    if (!mainCode) return;
+    navigator.clipboard.writeText(mainCode);
+    setCodeCopied(true);
+    setTimeout(() => setCodeCopied(false), 2000);
   };
 
   return (
@@ -258,86 +375,251 @@ export default function AutomationPage() {
       {/* Header */}
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 border-b border-zinc-800/80 pb-4">
         <div>
-          <h1 className="text-xl font-bold text-zinc-100 tracking-tight">Automation Studio</h1>
+          <div className="flex items-center space-x-2">
+            <h1 className="text-xl font-bold text-zinc-100 tracking-tight">Automation Studio</h1>
+            <span className="px-2 py-0.5 text-[10px] font-mono font-semibold rounded-full bg-gradient-to-r from-blue-500/20 to-purple-500/20 border border-blue-500/40 text-blue-300 flex items-center gap-1">
+              <Sparkles className="w-3 h-3 text-purple-400" /> Reka AI Powered
+            </span>
+          </div>
           <p className="text-xs text-zinc-400 mt-0.5">
-            Configure sub-10ms edge IFTTT rules and natural language automation logic.
+            Describe conditions in plain English — Reka AI understands intent and automatically updates the ESP32 main firmware code and edge rules.
           </p>
         </div>
 
-        <Button variant="primary" size="sm" icon={<Plus className="h-3.5 w-3.5" />} onClick={() => setShowModal(true)}>
-          Create Visual Rule
-        </Button>
+        <div className="flex items-center space-x-2">
+          {devices.length > 0 && (
+            <select
+              value={selectedDevice}
+              onChange={(e) => setSelectedDevice(e.target.value)}
+              className="bg-zinc-900 border border-zinc-700 text-xs text-zinc-200 rounded px-2.5 py-1.5 font-mono focus:border-blue-500 focus:outline-none"
+            >
+              {devices.map((d) => (
+                <option key={d.id} value={d.id}>
+                  Device: {d.name} ({d.id})
+                </option>
+              ))}
+            </select>
+          )}
+
+          <Button variant="secondary" size="sm" icon={<Plus className="h-3.5 w-3.5" />} onClick={() => setShowModal(true)}>
+            Visual Builder
+          </Button>
+        </div>
       </div>
 
-      {/* AI Copilot Developer Assistant Box */}
-      <div className="dev-panel p-5 space-y-4 bg-gradient-to-r from-zinc-900 via-[#121215] to-zinc-900 border-zinc-700/60">
-        <div className="flex items-center space-x-2">
-          <div className="p-1.5 bg-blue-600/20 border border-blue-500/30 rounded text-blue-400">
-            <Sparkles className="h-4 w-4" />
+      {/* AI Copilot Developer Assistant Box (Powered by Reka AI) */}
+      <div className="dev-panel p-5 space-y-4 bg-gradient-to-br from-zinc-900 via-[#101018] to-zinc-950 border-zinc-700/60 shadow-xl relative overflow-hidden">
+        <div className="absolute top-0 right-0 w-64 h-64 bg-blue-500/5 rounded-full blur-3xl pointer-events-none" />
+
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-zinc-800/80 pb-3">
+          <div className="flex items-center space-x-2.5">
+            <div className="p-2 bg-gradient-to-br from-blue-600 to-indigo-700 text-white rounded-lg shadow-sm">
+              <Bot className="h-4 w-4" />
+            </div>
+            <div>
+              <div className="flex items-center space-x-2">
+                <h2 className="text-xs font-bold text-zinc-100">Smart AI Automation Copilot</h2>
+                <span className="px-1.5 py-0.2 rounded text-[10px] font-mono bg-purple-900/40 border border-purple-500/30 text-purple-300">
+                  reka-edge-2603
+                </span>
+              </div>
+              <p className="text-[11px] text-zinc-400">
+                Type any condition in natural language. Reka AI translates it and updates the main ESP32 code instantly.
+              </p>
+            </div>
           </div>
-          <div>
-            <h2 className="text-xs font-bold text-zinc-100">AI IoT Copilot</h2>
-            <p className="text-[11px] text-zinc-400">Describe what you want to build in plain English.</p>
+
+          <div className="flex items-center space-x-2 text-[11px] text-zinc-400 font-mono">
+            <span className="inline-flex items-center px-2 py-0.5 rounded bg-emerald-500/10 border border-emerald-500/30 text-emerald-400">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 mr-1.5 animate-pulse" />
+              API Connected
+            </span>
           </div>
         </div>
 
-        <form onSubmit={handleAiGenerateProposal} className="space-y-3">
+        {/* Quick Prompt Chips */}
+        <div className="space-y-1.5">
+          <span className="text-[10px] font-mono text-zinc-400 uppercase tracking-wider block">Quick Presets:</span>
+          <div className="flex flex-wrap gap-1.5">
+            {QUICK_PROMPTS.map((qp, i) => (
+              <button
+                key={i}
+                type="button"
+                onClick={() => {
+                  setAiPrompt(qp.prompt);
+                  handleAiAutoApply(qp.prompt);
+                }}
+                className="px-2.5 py-1 rounded bg-zinc-800/80 hover:bg-zinc-700/80 border border-zinc-700/60 text-[11px] text-zinc-300 hover:text-white transition-all flex items-center gap-1 cursor-pointer"
+              >
+                <span>{qp.label}</span>
+                <ArrowRight className="w-2.5 h-2.5 opacity-60" />
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Main Prompt Input Form */}
+        <form onSubmit={handleAiGenerateProposal} className="space-y-3 pt-1">
           <div className="flex flex-col sm:flex-row gap-2">
-            <input
-              type="text"
-              value={aiPrompt}
-              onChange={(e) => setAiPrompt(e.target.value)}
-              placeholder="e.g., Turn on LED when motion is detected, or Turn on buzzer if temperature exceeds 30°C..."
-              className="flex-1 bg-zinc-950 border border-zinc-800 text-xs text-zinc-100 rounded-md px-3 py-2 focus:border-blue-500 focus:outline-none font-sans"
-            />
-            <Button variant="secondary" size="sm" type="submit" loading={aiLoading} icon={<Sparkles className="h-3.5 w-3.5 text-blue-400" />}>
-              Generate Proposal
-            </Button>
+            <div className="relative flex-1">
+              <input
+                type="text"
+                value={aiPrompt}
+                onChange={(e) => setAiPrompt(e.target.value)}
+                placeholder="e.g., Turn on LED when temperature exceeds 32°C, or sound buzzer alarm if motion is detected..."
+                className="w-full bg-zinc-950/90 border border-zinc-700/80 text-xs text-zinc-100 rounded-lg px-3.5 py-2.5 focus:border-blue-500 focus:ring-1 focus:ring-blue-500/30 focus:outline-none font-sans placeholder:text-zinc-500"
+              />
+            </div>
+
+            <div className="flex items-center gap-2">
+              <Button
+                variant="primary"
+                size="sm"
+                type="button"
+                loading={autoApplying}
+                onClick={() => handleAiAutoApply()}
+                icon={<Zap className="h-3.5 w-3.5 text-amber-300" />}
+                className="whitespace-nowrap bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500"
+              >
+                Understand & Auto-Update Code
+              </Button>
+
+              <Button
+                variant="secondary"
+                size="sm"
+                type="submit"
+                loading={aiLoading}
+                icon={<Sparkles className="h-3.5 w-3.5 text-purple-400" />}
+                className="whitespace-nowrap"
+              >
+                Review Proposal
+              </Button>
+            </div>
           </div>
         </form>
 
+        {/* Feedback Message Alert */}
         {aiMessage && (
           <div
-            className={`p-3 rounded text-xs flex items-center space-x-2 ${
+            className={`p-3 rounded-lg text-xs flex flex-col space-y-1 ${
               aiMessage.type === 'success'
-                ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
-                : 'bg-rose-500/10 text-rose-400 border border-rose-500/20'
+                ? 'bg-emerald-500/10 text-emerald-300 border border-emerald-500/30'
+                : 'bg-rose-500/10 text-rose-300 border border-rose-500/30'
             }`}
           >
-            {aiMessage.type === 'success' ? <Check className="h-4 w-4 shrink-0" /> : <AlertCircle className="h-4 w-4 shrink-0" />}
-            <span>{aiMessage.text}</span>
+            <div className="flex items-center space-x-2">
+              {aiMessage.type === 'success' ? <Check className="h-4 w-4 shrink-0 text-emerald-400" /> : <AlertCircle className="h-4 w-4 shrink-0 text-rose-400" />}
+              <span className="font-semibold">{aiMessage.text}</span>
+            </div>
+            {aiMessage.details && <p className="text-[11px] opacity-80 pl-6 font-mono">{aiMessage.details}</p>}
           </div>
         )}
 
-        {/* Proposed Configuration Review Panel (Requires Explicit User Confirmation) */}
+        {/* Proposed Configuration Review Panel */}
         {proposedConfig && (
-          <div className="dev-panel p-4 bg-zinc-950 border-blue-500/40 space-y-3">
+          <div className="dev-panel p-4 bg-zinc-950 border border-purple-500/40 space-y-3 rounded-lg shadow-inner">
             <div className="flex items-center justify-between border-b border-zinc-800 pb-2">
-              <span className="text-xs font-bold text-blue-300 font-mono">Proposed Configuration Review</span>
+              <div className="flex items-center space-x-2">
+                <Sparkles className="h-3.5 w-3.5 text-purple-400" />
+                <span className="text-xs font-bold text-purple-300 font-mono">Reka AI Proposal Review</span>
+              </div>
               <Badge variant="info">Confirmation Required</Badge>
             </div>
 
-            <div className="space-y-2 font-mono text-xs text-zinc-300">
-              <p className="font-semibold text-zinc-100">Rule Name: {proposedConfig.ruleName}</p>
-              <div className="p-2 bg-zinc-900 border border-zinc-800 rounded space-y-1">
+            <div className="space-y-2.5 font-mono text-xs text-zinc-300">
+              <p className="font-semibold text-zinc-100">
+                Rule Name: <span className="text-blue-300">{proposedConfig.ruleName}</span>
+              </p>
+
+              {proposedConfig.explanation && (
+                <p className="text-[11px] text-zinc-400 font-sans italic bg-zinc-900/60 p-2 rounded border border-zinc-800">
+                  &ldquo;{proposedConfig.explanation}&rdquo;
+                </p>
+              )}
+
+              {/* Hardware Summary */}
+              <div className="p-2.5 bg-zinc-900 border border-zinc-800 rounded space-y-1 text-[11px]">
                 {proposedConfig.hardwareSummary.map((item, idx) => (
                   <p key={idx} className="text-zinc-400">
                     ✓ {item}
                   </p>
                 ))}
               </div>
+
+              {/* Generated C++ Condition Snippet */}
+              {proposedConfig.cppConditionCode && (
+                <div className="space-y-1">
+                  <span className="text-[10px] uppercase tracking-wider text-zinc-400 font-bold">
+                    Generated C++ Condition Code for ESP32:
+                  </span>
+                  <pre className="p-2.5 bg-zinc-900/90 border border-zinc-800 rounded text-emerald-400 text-[11px] overflow-x-auto">
+                    {proposedConfig.cppConditionCode}
+                  </pre>
+                </div>
+              )}
             </div>
 
-            <div className="flex items-center justify-end space-x-2 pt-2">
+            <div className="flex items-center justify-end space-x-2 pt-2 border-t border-zinc-800">
               <Button variant="outline" size="sm" onClick={() => setProposedConfig(null)}>
                 Discard
               </Button>
-              <Button variant="primary" size="sm" icon={<Check className="h-3.5 w-3.5" />} onClick={handleApplyProposedConfig}>
-                Apply Configuration
+              <Button
+                variant="primary"
+                size="sm"
+                icon={<Check className="h-3.5 w-3.5" />}
+                onClick={handleApplyProposedConfig}
+              >
+                Apply & Update Main Code
               </Button>
             </div>
           </div>
         )}
+      </div>
+
+      {/* Live ESP32 Main Firmware Code Panel (Automatically Updated) */}
+      <div className="dev-panel overflow-hidden border border-zinc-800 bg-[#0d0d12]">
+        <div className="p-3.5 bg-zinc-900/80 border-b border-zinc-800 flex items-center justify-between">
+          <div className="flex items-center space-x-2.5">
+            <Code2 className="h-4 w-4 text-emerald-400" />
+            <div>
+              <h2 className="text-xs font-bold text-zinc-100 flex items-center gap-2">
+                Live ESP32 Main Firmware Code
+                <span className="px-2 py-0.5 text-[10px] font-mono rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                  Auto-Synchronized
+                </span>
+              </h2>
+              <p className="text-[10px] text-zinc-400">
+                Active automation conditions are automatically compiled into the ESP32 edge execution loop below.
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center space-x-2">
+            <button
+              onClick={copyCode}
+              className="px-2.5 py-1 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-[11px] font-mono rounded border border-zinc-700 flex items-center gap-1.5 transition-colors cursor-pointer"
+            >
+              {codeCopied ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+              <span>{codeCopied ? 'Copied!' : 'Copy C++'}</span>
+            </button>
+
+            {selectedDevice && (
+              <Link
+                href={`/devices/${selectedDevice}/firmware`}
+                className="px-2.5 py-1 bg-blue-600/20 hover:bg-blue-600/30 text-blue-300 text-[11px] font-mono rounded border border-blue-500/30 flex items-center gap-1 transition-colors"
+              >
+                <span>Full .ino Firmware</span>
+                <ArrowUpRight className="w-3 h-3" />
+              </Link>
+            )}
+          </div>
+        </div>
+
+        <div className="p-4 bg-zinc-950 overflow-x-auto max-h-72 font-mono text-[11.5px] leading-relaxed text-zinc-300">
+          <pre className="text-emerald-400 whitespace-pre">
+            {mainCode || '// Loading live main firmware code...'}
+          </pre>
+        </div>
       </div>
 
       {/* Active Rules List */}
@@ -347,7 +629,7 @@ export default function AutomationPage() {
             <Zap className="h-4 w-4 text-blue-400" />
             <h2 className="text-sm font-bold text-zinc-100">Configured Automation Rules</h2>
           </div>
-          <span className="text-xs font-mono text-zinc-400">Total: {rules.length} rules</span>
+          <span className="text-xs font-mono text-zinc-400">Total: {rules.length} rules active</span>
         </div>
 
         {initialLoading ? (
@@ -356,14 +638,17 @@ export default function AutomationPage() {
           <EmptyState
             icon={Zap}
             title="No Automation Rules Configured"
-            description="Create visual WHEN ... THEN ... logic rules or use the AI Copilot above."
+            description="Use the Reka AI Copilot above or click Visual Builder to create your first smart automation."
             actionLabel="Create Visual Rule"
             onAction={() => setShowModal(true)}
           />
         ) : (
           <div className="divide-y divide-zinc-800">
             {rules.map((rule) => (
-              <div key={rule.id} className="p-4 flex flex-col md:flex-row items-start md:items-center justify-between gap-4 hover:bg-zinc-800/40 transition-colors">
+              <div
+                key={rule.id}
+                className="p-4 flex flex-col md:flex-row items-start md:items-center justify-between gap-4 hover:bg-zinc-800/40 transition-colors"
+              >
                 <div className="space-y-1.5">
                   <div className="flex items-center space-x-2">
                     <h3 className="font-bold text-xs text-zinc-100">{rule.name}</h3>
@@ -393,7 +678,7 @@ export default function AutomationPage() {
                 <div className="flex items-center space-x-2">
                   <button
                     onClick={() => handleToggle(rule.id, rule.is_active)}
-                    className="p-1.5 text-zinc-400 hover:text-zinc-100 transition-colors"
+                    className="p-1.5 text-zinc-400 hover:text-zinc-100 transition-colors cursor-pointer"
                     title={rule.is_active ? 'Disable Rule' : 'Enable Rule'}
                   >
                     {rule.is_active ? (
@@ -405,7 +690,7 @@ export default function AutomationPage() {
 
                   <button
                     onClick={() => handleDelete(rule.id)}
-                    className="p-1.5 text-zinc-500 hover:text-rose-400 transition-colors"
+                    className="p-1.5 text-zinc-500 hover:text-rose-400 transition-colors cursor-pointer"
                     title="Delete Rule"
                   >
                     <Trash2 className="h-4 w-4" />
@@ -507,6 +792,7 @@ export default function AutomationPage() {
                   >
                     <option value="LED">LED</option>
                     <option value="BUZZER">Buzzer</option>
+                    <option value="SERVO">Servo Motor</option>
                     <option value="RELAY">Relay</option>
                     <option value="GENERIC_OUTPUT">Output Actuator</option>
                   </select>

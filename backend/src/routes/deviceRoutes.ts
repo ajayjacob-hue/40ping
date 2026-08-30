@@ -410,9 +410,22 @@ export function createDeviceManagementRouter(io: SocketIOServer): Router {
     }
   });
 
-  // POST /api/copilot/parse - AI Copilot deterministic rule parser
+  // GET /api/devices/:id/firmware/main-loop - Get updated C++ ESP32 main loop with active automation rules
+  router.get('/devices/:id/firmware/main-loop', async (req: Request, res: Response) => {
+    const { id } = req.params;
+    try {
+      const rulesRes = await query('SELECT * FROM automation_rules WHERE device_id = $1 AND is_active = true', [id]);
+      const mainLoopCode = aiCopilotService.generateMainLoopCode(rulesRes.rows);
+      return res.json({ success: true, mainLoopCode, rulesCount: rulesRes.rows.length });
+    } catch (error: any) {
+      console.error('Error generating main loop code:', error);
+      return res.status(500).json({ error: 'Failed to generate firmware code' });
+    }
+  });
+
+  // POST /api/copilot/parse - AI Copilot rule parser powered by Reka AI with auto-apply
   router.post('/copilot/parse', async (req: Request, res: Response) => {
-    const { prompt, deviceId } = req.body;
+    const { prompt, deviceId, autoApply } = req.body;
 
     if (!prompt) {
       return res.status(400).json({ error: 'Natural language prompt is required' });
@@ -420,15 +433,60 @@ export function createDeviceManagementRouter(io: SocketIOServer): Router {
 
     try {
       let components: any[] = [];
-      if (deviceId) {
-        const compRes = await query('SELECT type, gpio_pin FROM components WHERE device_id = $1', [deviceId]);
+      let targetDeviceId = deviceId;
+
+      if (!targetDeviceId) {
+        const firstDev = await query('SELECT id FROM devices LIMIT 1');
+        if (firstDev.rows.length > 0) {
+          targetDeviceId = firstDev.rows[0].id;
+        }
+      }
+
+      if (targetDeviceId) {
+        const compRes = await query('SELECT type, gpio_pin, name FROM components WHERE device_id = $1', [targetDeviceId]);
         components = compRes.rows;
       }
 
       const copilotResult = await aiCopilotService.parsePrompt(prompt, components);
-      return res.json(copilotResult);
+
+      let appliedRule = null;
+      if (autoApply && copilotResult.success && copilotResult.rule && targetDeviceId) {
+        const r = copilotResult.rule;
+        const resRule = await query(
+          'INSERT INTO automation_rules (device_id, name, sensor_component, condition, trigger_value, action_component, action_type, action_value, is_active) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, true) RETURNING *',
+          [targetDeviceId, r.name, r.sensor_component, r.condition, r.trigger_value, r.action_component, r.action_type, r.action_value]
+        );
+        appliedRule = resRule.rows[0];
+
+        await query(
+          'INSERT INTO device_events (device_id, event_type, message) VALUES ($1, $2, $3)',
+          [targetDeviceId, 'RULE_CREATED', `[Reka AI] Auto-applied rule: "${r.name}"`]
+        );
+
+        io.emit('rule_created', appliedRule);
+        io.to(targetDeviceId).emit('rule_created', appliedRule);
+      }
+
+      // Fetch all active rules to generate the updated main ESP32 C++ loop code
+      let allRules: any[] = [];
+      if (targetDeviceId) {
+        const allRulesRes = await query('SELECT * FROM automation_rules WHERE device_id = $1 AND is_active = true', [targetDeviceId]);
+        allRules = allRulesRes.rows;
+      } else {
+        allRules = copilotResult.rule ? [copilotResult.rule] : [];
+      }
+
+      const updatedMainCode = aiCopilotService.generateMainLoopCode(allRules);
+
+      return res.json({
+        ...copilotResult,
+        appliedRule,
+        updated_main_code: updatedMainCode,
+        deviceId: targetDeviceId,
+      });
     } catch (error: any) {
-      return res.status(500).json({ error: 'AI Copilot processing failed' });
+      console.error('AI Copilot processing error:', error);
+      return res.status(500).json({ error: 'AI Copilot processing failed', details: error.message });
     }
   });
 
