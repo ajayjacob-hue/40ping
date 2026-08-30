@@ -254,13 +254,17 @@ export function createDeviceManagementRouter(io: SocketIOServer): Router {
 
     try {
       // Ensure target device exists in database
-      const devCheck = await query('SELECT id FROM devices WHERE id = $1', [id]);
+      const devCheck = await query('SELECT * FROM devices WHERE id = $1', [id]);
       if (devCheck.rows.length === 0) {
         const defaultToken = 'TOKEN_' + Math.random().toString(36).substring(2, 10).toUpperCase();
-        await query(
-          'INSERT INTO devices (id, name, token, status, ip_address) VALUES ($1, $2, $3, $4, $5)',
-          [id, `ESP32 Node (${id})`, defaultToken, 'ONLINE', '127.0.0.1']
-        );
+        try {
+          await query(
+            'INSERT INTO devices (id, name, token, status, ip_address) VALUES ($1, $2, $3, $4, $5) ON CONFLICT (id) DO NOTHING',
+            [id, `ESP32 Node (${id})`, defaultToken, 'ONLINE', '127.0.0.1']
+          );
+        } catch (insertErr) {
+          console.warn('Device insert notice:', insertErr);
+        }
       }
 
       const resCmd = await query(

@@ -137,7 +137,7 @@ export async function query(text: string, params: any[] = []): Promise<{ rows: a
   const lowerSql = sql.toLowerCase();
 
   // DEVICES TABLE OPERATORS
-  if (lowerSql.startsWith('select * from devices where id =')) {
+  if (lowerSql.includes('from devices where id =')) {
     const devId = params[0];
     const dev = memoryDb.devices.get(devId);
     return { rows: dev ? [dev] : [], rowCount: dev ? 1 : 0 };
@@ -309,9 +309,12 @@ export async function query(text: string, params: any[] = []): Promise<{ rows: a
   }
 
   // DEVICE COMMANDS OPERATORS
-  if (lowerSql.includes('from device_commands where device_id =') && lowerSql.includes("status = 'pending'")) {
-    const devId = params[0];
-    const cmds = memoryDb.commands.filter(c => c.device_id === devId && c.status === 'PENDING');
+  if (lowerSql.includes('from device_commands') && lowerSql.includes("status = 'pending'")) {
+    let cmds = memoryDb.commands.filter(c => c.status === 'PENDING');
+    if (lowerSql.includes('where device_id =')) {
+      const devId = params[0];
+      cmds = cmds.filter(c => c.device_id === devId);
+    }
     return { rows: cmds, rowCount: cmds.length };
   }
 
