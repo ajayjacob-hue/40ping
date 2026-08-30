@@ -195,7 +195,7 @@ export default function TelemetryPage() {
     return Array.from(set);
   }, [readings]);
 
-  // SVG Chart Curve Generator - filters to specific metric so trend line is 100% accurate
+  // SVG Chart Curve Generator - filters to specific metric with exact numeric value overlays
   const chartPath = useMemo(() => {
     const targetMetric = selectedMetric !== 'ALL' 
       ? selectedMetric.toLowerCase() 
@@ -208,24 +208,31 @@ export default function TelemetryPage() {
       })
       .reverse();
 
-    if (list.length < 2) return { path: '', area: '', metricName: targetMetric, pointsCount: list.length };
+    const unit = targetMetric === 'temperature' ? '°C' : targetMetric === 'humidity' ? '%' : targetMetric === 'distance' ? 'cm' : '';
+
+    if (list.length < 2) {
+      return { path: '', area: '', metricName: targetMetric, pointsCount: list.length, min: 0, max: 0, mid: 0, unit, points: [] };
+    }
 
     const width = 800;
     const height = 180;
     const vals = list.map((r) => Number(r.value) || 0);
     const min = Math.min(...vals);
     const max = Math.max(...vals);
+    const mid = parseFloat(((min + max) / 2).toFixed(1));
     const range = max - min || 1;
 
     const points = list.map((item, idx) => {
-      const x = (idx / (list.length - 1)) * width;
-      const y = height - (((Number(item.value) || 0) - min) / range) * (height - 20) - 10;
-      return `${x},${y}`;
+      const x = 50 + (idx / (list.length - 1 || 1)) * (width - 70);
+      const y = height - (((Number(item.value) || 0) - min) / range) * (height - 50) - 25;
+      const val = parseFloat((Number(item.value) || 0).toFixed(1));
+      const time = new Date(item.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+      return { x, y, val, time };
     });
 
-    const path = `M ${points.join(' L ')}`;
-    const area = `${path} L ${width},${height} L 0,${height} Z`;
-    return { path, area, metricName: targetMetric, pointsCount: list.length };
+    const path = `M ${points.map((p) => `${p.x},${p.y}`).join(' L ')}`;
+    const area = `${path} L ${points[points.length - 1].x},${height - 10} L ${points[0].x},${height - 10} Z`;
+    return { path, area, metricName: targetMetric, pointsCount: list.length, min, max, mid, unit, points };
   }, [readings, selectedDevice, selectedMetric, availableMetrics]);
 
   const activeTargetDeviceId = useMemo(() => {
@@ -275,8 +282,10 @@ export default function TelemetryPage() {
   const handleToggleActuator = async (targetDeviceId: string, gpioPin: number, currentVal: boolean) => {
     const devId = targetDeviceId || activeTargetDeviceId;
     const nextVal = currentVal ? 0 : 1;
-    // Optimistically update UI toggle state instantly for immediate user feedback
-    setActuatorStates((prev) => ({ ...prev, [`${devId}_${gpioPin}`]: !currentVal }));
+    const pinKey = `pin_${gpioPin}`;
+
+    // Optimistically toggle UI button state instantly for ON (1) / OFF (0)
+    setActuatorStates((prev) => ({ ...prev, [pinKey]: !currentVal }));
 
     try {
       setCommandSending(true);
@@ -286,7 +295,7 @@ export default function TelemetryPage() {
         value: nextVal,
       });
     } catch (err) {
-      console.warn('Command queued with fallback dispatcher:', err);
+      console.warn('Command queued:', err);
     } finally {
       setCommandSending(false);
     }
@@ -423,22 +432,49 @@ export default function TelemetryPage() {
             <span>Ingesting telemetry payload...</span>
           </div>
         ) : (
-          <div className="relative w-full h-48 pt-2">
-            <svg viewBox="0 0 800 180" className="w-full h-full overflow-visible">
+          <div className="relative w-full h-52 pt-2">
+            <svg viewBox="0 0 800 190" className="w-full h-full overflow-visible font-mono text-[10px]">
               <defs>
                 <linearGradient id="telemetryAreaGrad" x1="0" y1="0" x2="0" y2="1">
                   <stop offset="0%" stopColor="#2563eb" stopOpacity="0.3" />
                   <stop offset="100%" stopColor="#2563eb" stopOpacity="0.0" />
                 </linearGradient>
               </defs>
-              <line x1="0" y1="20" x2="800" y2="20" stroke="#27272a" strokeDasharray="3 3" />
-              <line x1="0" y1="90" x2="800" y2="90" stroke="#27272a" strokeDasharray="3 3" />
-              <line x1="0" y1="160" x2="800" y2="160" stroke="#27272a" strokeDasharray="3 3" />
 
+              {/* Y-Axis Value Labels & Dashed Grid Lines */}
+              <g className="fill-zinc-400 font-bold">
+                <text x="5" y="24">{chartPath.max} {chartPath.unit}</text>
+                <line x1="45" y1="20" x2="800" y2="20" stroke="#27272a" strokeDasharray="3 3" />
+
+                <text x="5" y="94">{chartPath.mid} {chartPath.unit}</text>
+                <line x1="45" y1="90" x2="800" y2="90" stroke="#27272a" strokeDasharray="3 3" />
+
+                <text x="5" y="164">{chartPath.min} {chartPath.unit}</text>
+                <line x1="45" y1="160" x2="800" y2="160" stroke="#27272a" strokeDasharray="3 3" />
+              </g>
+
+              {/* Filled Chart Area & Smooth Trend Line */}
               {chartPath.area && <path d={chartPath.area} fill="url(#telemetryAreaGrad)" />}
               {chartPath.path && (
-                <path d={chartPath.path} fill="none" stroke="#3b82f6" strokeWidth="2" strokeLinecap="round" />
+                <path d={chartPath.path} fill="none" stroke="#3b82f6" strokeWidth="2.5" strokeLinecap="round" />
               )}
+
+              {/* Exact Data Point Circles & Numerical Value Overlay Labels */}
+              {chartPath.points && chartPath.points.slice(-15).map((p, idx) => (
+                <g key={idx}>
+                  <circle cx={p.x} cy={p.y} r="4" fill="#60a5fa" stroke="#1d4ed8" strokeWidth="1.5" />
+                  <text
+                    x={p.x}
+                    y={p.y - 8}
+                    fill="#38bdf8"
+                    fontSize="9"
+                    fontWeight="bold"
+                    textAnchor="middle"
+                  >
+                    {p.val}{chartPath.unit}
+                  </text>
+                </g>
+              ))}
             </svg>
           </div>
         )}
@@ -457,7 +493,7 @@ export default function TelemetryPage() {
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
           {outputActuators.map((actuator) => {
             const targetDev = activeTargetDeviceId;
-            const isOn = Boolean(actuatorStates[`${targetDev}_${actuator.pin}`]);
+            const isOn = Boolean(actuatorStates[`pin_${actuator.pin}`]);
             const Icon = actuator.icon;
 
             return (
