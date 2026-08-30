@@ -454,6 +454,14 @@ export function createDeviceManagementRouter(io: SocketIOServer): Router {
         const firstDev = await query('SELECT id FROM devices LIMIT 1');
         if (firstDev.rows.length > 0) {
           targetDeviceId = firstDev.rows[0].id;
+        } else {
+          targetDeviceId = 'ESP32-AUTO';
+          try {
+            await query(
+              'INSERT INTO devices (id, name, token, status, ip_address) VALUES ($1, $2, $3, $4, $5)',
+              ['ESP32-AUTO', 'Smart Room ESP32', 'auto-token-demo', 'ONLINE', '127.0.0.1']
+            );
+          } catch (e) {}
         }
       }
 

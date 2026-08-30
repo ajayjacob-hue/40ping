@@ -98,6 +98,73 @@ export default function AutomationPage() {
     { label: '🔘 Button pressed ➔ LED Off', prompt: 'Turn off LED when button is pressed' }
   ];
 
+  const buildMainLoopCode = (activeRules: AutomationRule[]) => {
+    const filtered = activeRules.filter((r) => r.is_active !== false);
+    let conditionsCode = '';
+    if (filtered.length === 0) {
+      conditionsCode = `  // No active smart automations configured yet.\n  // Use the Reka AI Copilot above to automatically inject real-time edge conditions.`;
+    } else {
+      conditionsCode = filtered
+        .map((r, i) => {
+          let op = r.condition === 'GREATER_THAN' ? '>' : r.condition === 'LESS_THAN' ? '<' : '==';
+          let check = '';
+          if (r.sensor_component === 'DHT11') check = `temp ${op} ${r.trigger_value}.0`;
+          else if (r.sensor_component === 'PIR') check = `digitalRead(PIR_PIN) == HIGH`;
+          else if (r.sensor_component === 'LDR') check = `analogRead(LDR_PIN) ${op} ${r.trigger_value}`;
+          else if (r.sensor_component === 'HC-SR04') check = `distanceCm ${op} ${r.trigger_value}.0`;
+          else if (r.sensor_component === 'PUSH_BUTTON') check = `digitalRead(BUTTON_PIN) == LOW`;
+          else check = `sensorVal > ${r.trigger_value}`;
+
+          const isMomentary = r.sensor_component === 'PIR' || r.sensor_component === 'PUSH_BUTTON';
+          const dur = (r as any).duration_seconds || (isMomentary ? 5 : 0);
+          const pinName = `${r.action_component}_PIN`;
+          const timerVar = `timer_${r.action_component.toLowerCase()}`;
+
+          if (r.action_component === 'SERVO') {
+            return `  // Smart Automation Rule ${i + 1}: ${r.name}\n  if (${check}) {\n    servoMotor.write(${r.action_value});\n  }`;
+          } else if (dur > 0) {
+            return `  // Smart Automation Rule ${i + 1}: ${r.name} (${dur}s Timed Pulse)\n  if (${check}) {\n    ${timerVar} = millis() + ${dur * 1000}; // Keep ON for ${dur}s\n    digitalWrite(${pinName}, HIGH);\n  } else if (millis() > ${timerVar}) {\n    digitalWrite(${pinName}, LOW);  // Auto-off after ${dur}s\n  }`;
+          } else {
+            const onState = Number(r.action_value) === 1 ? 'HIGH' : 'LOW';
+            const offState = Number(r.action_value) === 1 ? 'LOW' : 'HIGH';
+            return `  // Smart Automation Rule ${i + 1}: ${r.name} (Auto-reset)\n  if (${check}) {\n    digitalWrite(${pinName}, ${onState});\n  } else {\n    digitalWrite(${pinName}, ${offState});\n  }`;
+          }
+        })
+        .join('\n\n');
+    }
+
+    return `// =======================================================
+// ⚡ ESP32 LOCAL EDGE SMART AUTOMATION EVALUATION
+// Auto-updated via Reka AI Copilot & Web Automation Studio
+// =======================================================
+unsigned long timer_led    = 0;
+unsigned long timer_buzzer = 0;
+unsigned long timer_relay  = 0;
+
+void evaluateLocalAutomations() {
+${conditionsCode}
+}
+
+void loop() {
+  if (WiFi.status() != WL_CONNECTED) connectWiFi();
+  if (!mqttClient.connected()) connectMQTT();
+  else mqttClient.loop();
+
+  // 1. Evaluate Active Smart Edge Conditions Instantly (< 1ms latency)
+  evaluateLocalAutomations();
+
+  unsigned long currentMillis = millis();
+
+  // 2. Transmit Telemetry Every 2000ms
+  if (currentMillis - lastTelemetryTime >= 2000) {
+    lastTelemetryTime = currentMillis;
+    sendTelemetry();
+  }
+
+  delay(10);
+}`;
+  };
+
   const fetchMainLoopCode = async (devId: string) => {
     if (!devId) return;
     try {
@@ -114,12 +181,14 @@ export default function AutomationPage() {
     try {
       if (isInitial) setInitialLoading(true);
       const [rulesRes, devRes] = await Promise.all([
-        axios.get(`${backendUrl}/api/automations`),
-        axios.get(`${backendUrl}/api/devices`),
+        axios.get(`${backendUrl}/api/automations`).catch(() => ({ data: { rules: [] } })),
+        axios.get(`${backendUrl}/api/devices`).catch(() => ({ data: { devices: [] } })),
       ]);
 
       const fetchedRules = rulesRes.data.rules || [];
       setRules(fetchedRules);
+      setMainCode(buildMainLoopCode(fetchedRules));
+
       const devList = devRes.data.devices || [];
       setDevices(devList);
 
@@ -235,11 +304,7 @@ export default function AutomationPage() {
       setAiMessage(null);
       setProposedConfig(null);
 
-      const devId = selectedDevice || (devices[0]?.id || '');
-      if (!devId) {
-        setAiMessage({ type: 'error', text: 'Please register or select an ESP32 hardware device first.' });
-        return;
-      }
+      const devId = selectedDevice || (devices[0]?.id || 'ESP32-AUTO');
 
       const res = await axios.post(`${backendUrl}/api/copilot/parse`, {
         prompt: promptToUse,
@@ -281,11 +346,7 @@ export default function AutomationPage() {
       setAiMessage(null);
       setProposedConfig(null);
 
-      const devId = selectedDevice || (devices[0]?.id || '');
-      if (!devId) {
-        setAiMessage({ type: 'error', text: 'Please register an ESP32 hardware device first.' });
-        return;
-      }
+      const devId = selectedDevice || (devices[0]?.id || 'ESP32-AUTO');
 
       const res = await axios.post(`${backendUrl}/api/copilot/parse`, {
         prompt: aiPrompt,
@@ -323,12 +384,11 @@ export default function AutomationPage() {
   // Apply Proposed Configuration after user review
   const handleApplyProposedConfig = async () => {
     if (!proposedConfig) return;
-    const devId = selectedDevice || (devices[0]?.id || '');
-    if (!devId) return;
+    const devId = selectedDevice || (devices[0]?.id || 'ESP32-AUTO');
 
     try {
       setAiLoading(true);
-      const res = await axios.post(`${backendUrl}/api/devices/${devId}/automations`, {
+      await axios.post(`${backendUrl}/api/devices/${devId}/automations`, {
         name: proposedConfig.ruleName,
         sensor_component: proposedConfig.sensorComponent,
         condition: proposedConfig.condition,

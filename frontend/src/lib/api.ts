@@ -9,9 +9,10 @@ export const getBackendUrl = () => {
     if (hostname === 'localhost' || hostname === '127.0.0.1' || hostname.startsWith('192.168.') || hostname.startsWith('10.')) {
       return `http://${hostname}:4000`;
     }
-    return window.location.origin.replace(':3000', ':4000');
+    // Production Cloud Deployment fallback (Vercel -> Render backend)
+    return 'https://iot-backend-2etp.onrender.com';
   }
-  return 'http://127.0.0.1:4000';
+  return process.env.NEXT_PUBLIC_BACKEND_URL || 'https://iot-backend-2etp.onrender.com';
 };
 
 export const api = axios.create({
