@@ -289,11 +289,14 @@ export default function TelemetryPage() {
 
     try {
       setCommandSending(true);
-      await axios.post(`${backendUrl}/api/devices/${devId}/commands`, {
+      const payload = {
         command_type: 'GPIO_WRITE',
         gpio_pin: gpioPin,
         value: nextVal,
-      });
+      };
+
+      await axios.post(`${backendUrl}/api/devices/${devId}/commands`, payload)
+        .catch(() => axios.post(`${backendUrl}/api/device/${devId}/commands`, payload));
     } catch (err) {
       console.warn('Command queued:', err);
     } finally {
