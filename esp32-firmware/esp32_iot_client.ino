@@ -383,10 +383,10 @@ void pollAndExecuteCommands() {
         int gpio = cmd["gpio"];
         int val = cmd["value"];
 
-        Serial.printf("⚡ Executing command #%d on GPIO %d -> %d\n", cmdId, gpio, val);
+        Serial.printf("⚡ Executing command #%d on GPIO %d -> %s (%d)\n", cmdId, gpio, (val > 0) ? "HIGH (ON)" : "LOW (OFF)", val);
 
         pinMode(gpio, OUTPUT);
-        digitalWrite(gpio, val == 1 ? HIGH : LOW);
+        digitalWrite(gpio, (val > 0) ? HIGH : LOW);
 
         sendCommandAck(cmdId);
       }

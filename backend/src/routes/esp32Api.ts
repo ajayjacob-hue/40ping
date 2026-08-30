@@ -16,17 +16,22 @@ export function createEsp32Router(io: SocketIOServer): Router {
     }
 
     try {
-      const devRes = await query('SELECT * FROM devices WHERE id = $1', [deviceId]);
+      let devRes = await query('SELECT * FROM devices WHERE id = $1', [deviceId]);
       if (devRes.rows.length === 0) {
-        return res.status(404).json({ error: 'Device not found' });
+        const clientIp = (req.ip || req.socket.remoteAddress || '').replace('::ffff:', '');
+        const defaultToken = token || 'TOKEN_' + Math.random().toString(36).substring(2, 10).toUpperCase();
+        try {
+          await query(
+            'INSERT INTO devices (id, name, token, status, ip_address) VALUES ($1, $2, $3, $4, $5) ON CONFLICT (id) DO NOTHING',
+            [deviceId, `ESP32 Hardware Node (${deviceId})`, defaultToken, 'ONLINE', clientIp]
+          );
+        } catch (insertErr) {
+          console.warn('Auto-register device notice:', insertErr);
+        }
+        devRes = await query('SELECT * FROM devices WHERE id = $1', [deviceId]);
       }
 
-      const device = devRes.rows[0];
-      if (token && device.token !== token) {
-        return res.status(401).json({ error: 'Invalid device token' });
-      }
-
-      // Attach client IP address and device object
+      const device = devRes.rows[0] || { id: deviceId, name: deviceId, token: token || 'DEFAULT' };
       const clientIp = req.ip || req.socket.remoteAddress || '';
       (req as any).device = device;
       (req as any).clientIp = clientIp.replace('::ffff:', '');
