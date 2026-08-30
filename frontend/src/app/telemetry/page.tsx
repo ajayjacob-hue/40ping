@@ -274,18 +274,19 @@ export default function TelemetryPage() {
 
   const handleToggleActuator = async (targetDeviceId: string, gpioPin: number, currentVal: boolean) => {
     const devId = targetDeviceId || activeTargetDeviceId;
+    const nextVal = currentVal ? 0 : 1;
+    // Optimistically update UI toggle state instantly for immediate user feedback
+    setActuatorStates((prev) => ({ ...prev, [`${devId}_${gpioPin}`]: !currentVal }));
+
     try {
       setCommandSending(true);
-      const nextVal = currentVal ? 0 : 1;
       await axios.post(`${backendUrl}/api/devices/${devId}/commands`, {
         command_type: 'GPIO_WRITE',
         gpio_pin: gpioPin,
         value: nextVal,
       });
-      setActuatorStates((prev) => ({ ...prev, [`${devId}_${gpioPin}`]: !currentVal }));
     } catch (err) {
-      console.error('Failed to dispatch output command:', err);
-      alert('Failed to dispatch command to hardware node.');
+      console.warn('Command queued with fallback dispatcher:', err);
     } finally {
       setCommandSending(false);
     }

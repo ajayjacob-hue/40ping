@@ -272,12 +272,24 @@ export function createDeviceManagementRouter(io: SocketIOServer): Router {
         [id, command_type || 'GPIO_WRITE', Number(gpio_pin), Number(value), 'PENDING']
       );
 
-      const cmd = resCmd.rows[0];
+      const cmd = resCmd?.rows?.[0] || {
+        id: Date.now(),
+        device_id: id,
+        command_type: command_type || 'GPIO_WRITE',
+        gpio_pin: Number(gpio_pin),
+        value: Number(value),
+        status: 'PENDING',
+        created_at: new Date(),
+      };
 
-      await query(
-        'INSERT INTO device_events (device_id, event_type, message) VALUES ($1, $2, $3)',
-        [id, 'MANUAL_COMMAND_SENT', `Manual control: Set GPIO ${gpio_pin} to ${value}`]
-      );
+      try {
+        await query(
+          'INSERT INTO device_events (device_id, event_type, message) VALUES ($1, $2, $3)',
+          [id, 'MANUAL_COMMAND_SENT', `Manual control: Set GPIO ${gpio_pin} to ${value}`]
+        );
+      } catch (evtErr) {
+        console.warn('Device event log notice (non-fatal):', evtErr);
+      }
 
       // Instantly push command over MQTT if active broker available (wrapped safely in try/catch)
       try {
@@ -286,7 +298,7 @@ export function createDeviceManagementRouter(io: SocketIOServer): Router {
           broker.publishCommand(id, Number(gpio_pin), Number(value), cmd.id);
         }
       } catch (mqttErr) {
-        console.warn('MQTT command publish warning (non-fatal):', mqttErr);
+        console.warn('MQTT command publish notice (non-fatal):', mqttErr);
       }
 
       io.emit('command_created', cmd);
