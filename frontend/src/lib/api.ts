@@ -1,10 +1,15 @@
 import axios from 'axios';
 
-// Get backend URL (defaults to http://127.0.0.1:4000 or relative)
 export const getBackendUrl = () => {
+  if (process.env.NEXT_PUBLIC_BACKEND_URL) {
+    return process.env.NEXT_PUBLIC_BACKEND_URL.replace(/\/$/, '');
+  }
   if (typeof window !== 'undefined') {
     const hostname = window.location.hostname;
-    return `http://${hostname}:4000`;
+    if (hostname === 'localhost' || hostname === '127.0.0.1' || hostname.startsWith('192.168.') || hostname.startsWith('10.')) {
+      return `http://${hostname}:4000`;
+    }
+    return window.location.origin.replace(':3000', ':4000');
   }
   return 'http://127.0.0.1:4000';
 };

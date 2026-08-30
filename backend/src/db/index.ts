@@ -7,10 +7,13 @@ dotenv.config();
 
 const connectionString = process.env.DATABASE_URL || 'postgres://postgres:postgres@localhost:5432/iot_db';
 
+const isProductionOrCloud = Boolean(process.env.DATABASE_URL && !process.env.DATABASE_URL.includes('localhost'));
+
 export const pool = new Pool({
   connectionString,
+  ssl: isProductionOrCloud ? { rejectUnauthorized: false } : false,
   idleTimeoutMillis: 30000,
-  connectionTimeoutMillis: 2000,
+  connectionTimeoutMillis: 5000,
 });
 
 let isPostgresAvailable = false;
