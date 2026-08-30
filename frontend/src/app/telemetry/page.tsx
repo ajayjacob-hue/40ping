@@ -3,7 +3,7 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
 import axios from 'axios';
 import { io, Socket } from 'socket.io-client';
-import { getBackendUrl, Device } from '@/lib/api';
+import { getBackendUrl, Device, Component } from '@/lib/api';
 import Button from '@/components/ui/Button';
 import Badge from '@/components/ui/Badge';
 import EmptyState from '@/components/ui/EmptyState';
@@ -21,7 +21,8 @@ import {
   Power,
   Zap,
   Lightbulb,
-  Volume2
+  Volume2,
+  Plus
 } from 'lucide-react';
 
 interface TelemetryReading {
@@ -38,6 +39,7 @@ interface TelemetryReading {
 export default function TelemetryPage() {
   const [readings, setReadings] = useState<TelemetryReading[]>([]);
   const [devices, setDevices] = useState<Device[]>([]);
+  const [deviceComponents, setDeviceComponents] = useState<Component[]>([]);
   const [initialLoading, setInitialLoading] = useState(true);
   const [selectedDevice, setSelectedDevice] = useState<string>('ALL');
   const [selectedMetric, setSelectedMetric] = useState<string>('ALL');
@@ -113,6 +115,44 @@ export default function TelemetryPage() {
       socket.disconnect();
     };
   }, [backendUrl]);
+
+  useEffect(() => {
+    const fetchComponents = async () => {
+      const targetId = selectedDevice !== 'ALL' ? selectedDevice : devices[0]?.id;
+      if (!targetId) {
+        setDeviceComponents([]);
+        return;
+      }
+      try {
+        const res = await axios.get(`${backendUrl}/api/devices/${targetId}`);
+        setDeviceComponents(res.data.components || []);
+      } catch (err) {
+        console.error('Failed to fetch components for target device:', err);
+      }
+    };
+    fetchComponents();
+  }, [selectedDevice, devices, backendUrl]);
+
+  const outputActuators = useMemo(() => {
+    if (deviceComponents.length > 0) {
+      const outputs = deviceComponents.filter((c) => c.category === 'OUTPUT' || ['LED', 'BUZZER', 'RELAY', 'GENERIC_OUTPUT'].includes(c.type));
+      if (outputs.length > 0) {
+        return outputs.map((c) => ({
+          pin: c.gpio_pin,
+          name: c.name,
+          type: c.type,
+          icon: c.type === 'LED' ? Lightbulb : c.type === 'BUZZER' ? Volume2 : c.type === 'RELAY' ? Power : Zap,
+          color: c.type === 'LED' ? 'text-amber-400' : c.type === 'BUZZER' ? 'text-blue-400' : c.type === 'RELAY' ? 'text-emerald-400' : 'text-purple-400',
+        }));
+      }
+    }
+    return [
+      { pin: 2, name: 'Status Indicator LED', type: 'LED', icon: Lightbulb, color: 'text-amber-400' },
+      { pin: 18, name: 'External LED Light', type: 'LED', icon: Lightbulb, color: 'text-amber-400' },
+      { pin: 19, name: 'Audio Buzzer Alarm', type: 'BUZZER', icon: Volume2, color: 'text-blue-400' },
+      { pin: 25, name: 'Power Relay Switch', type: 'RELAY', icon: Power, color: 'text-emerald-400' },
+    ];
+  }, [deviceComponents]);
 
   // Filtered readings list
   const filteredReadings = useMemo(() => {
@@ -350,12 +390,7 @@ export default function TelemetryPage() {
         </div>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-          {[
-            { pin: 18, name: 'Status Indicator LED', type: 'LED', icon: Lightbulb, color: 'text-amber-400' },
-            { pin: 19, name: 'Audio Buzzer Alarm', type: 'BUZZER', icon: Volume2, color: 'text-blue-400' },
-            { pin: 25, name: 'Power Relay Switch', type: 'RELAY', icon: Power, color: 'text-emerald-400' },
-            { pin: 26, name: 'Generic Output Pin', type: 'OUTPUT', icon: Zap, color: 'text-purple-400' },
-          ].map((actuator) => {
+          {outputActuators.map((actuator) => {
             const targetDev = selectedDevice !== 'ALL' ? selectedDevice : (devices[0]?.id || 'ESP32-A7F92');
             const isOn = Boolean(actuatorStates[`${targetDev}_${actuator.pin}`]);
             const Icon = actuator.icon;

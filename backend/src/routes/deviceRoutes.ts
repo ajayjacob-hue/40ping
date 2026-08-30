@@ -243,8 +243,8 @@ export function createDeviceManagementRouter(io: SocketIOServer): Router {
     }
   });
 
-  // POST /api/devices/:id/commands - Manual actuation from Dashboard
-  router.post('/devices/:id/commands', async (req: Request, res: Response) => {
+  // POST /api/devices/:id/commands & /api/device/:id/commands - Manual actuation from Dashboard
+  const handlePostCommand = async (req: Request, res: Response) => {
     const { id } = req.params;
     const { command_type, gpio_pin, value } = req.body;
 
@@ -253,6 +253,16 @@ export function createDeviceManagementRouter(io: SocketIOServer): Router {
     }
 
     try {
+      // Ensure target device exists in database
+      const devCheck = await query('SELECT id FROM devices WHERE id = $1', [id]);
+      if (devCheck.rows.length === 0) {
+        const defaultToken = 'TOKEN_' + Math.random().toString(36).substring(2, 10).toUpperCase();
+        await query(
+          'INSERT INTO devices (id, name, token, status, ip_address) VALUES ($1, $2, $3, $4, $5)',
+          [id, `ESP32 Node (${id})`, defaultToken, 'ONLINE', '127.0.0.1']
+        );
+      }
+
       const resCmd = await query(
         'INSERT INTO device_commands (device_id, command_type, gpio_pin, value, status) VALUES ($1, $2, $3, $4, $5) RETURNING *',
         [id, command_type || 'GPIO_WRITE', Number(gpio_pin), Number(value), 'PENDING']
@@ -265,19 +275,24 @@ export function createDeviceManagementRouter(io: SocketIOServer): Router {
         [id, 'MANUAL_COMMAND_SENT', `Manual control: Set GPIO ${gpio_pin} to ${value}`]
       );
 
-      // Instantly push command over MQTT
+      // Instantly push command over MQTT if active broker available
       const broker = getMqttBroker();
       if (broker) {
         broker.publishCommand(id, Number(gpio_pin), Number(value), cmd.id);
       }
 
+      io.emit('command_created', cmd);
       io.to(id).emit('command_created', cmd);
 
       return res.status(201).json({ success: true, command: cmd });
     } catch (error: any) {
+      console.error('Error queuing command:', error);
       return res.status(500).json({ error: 'Failed to queue command' });
     }
-  });
+  };
+
+  router.post('/devices/:id/commands', handlePostCommand);
+  router.post('/device/:id/commands', handlePostCommand);
 
   // GLOBAL AUTOMATION ROUTES
   // GET /api/automations - Retrieve all automation rules across all devices
