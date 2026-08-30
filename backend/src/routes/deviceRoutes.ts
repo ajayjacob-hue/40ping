@@ -331,6 +331,46 @@ export function createDeviceManagementRouter(io: SocketIOServer): Router {
   router.post('/devices/:id/commands', handlePostCommand);
   router.post('/device/:id/commands', handlePostCommand);
 
+  // GET /api/devices/:id/commands & /api/device/:id/commands - Hardware command retrieval
+  const handleGetCommands = async (req: Request, res: Response) => {
+    const deviceId = req.params.id || req.params.deviceId;
+    try {
+      let cmdRes = await query(
+        "SELECT * FROM device_commands WHERE device_id = $1 AND status = 'PENDING' ORDER BY created_at ASC",
+        [deviceId]
+      );
+
+      if (cmdRes.rows.length === 0) {
+        cmdRes = await query(
+          "SELECT * FROM device_commands WHERE status = 'PENDING' AND created_at >= NOW() - INTERVAL '2 minutes' ORDER BY created_at ASC"
+        );
+      }
+
+      const pendingCommands = cmdRes.rows.map(c => ({
+        id: c.id,
+        type: c.command_type,
+        gpio: c.gpio_pin,
+        value: c.value,
+      }));
+
+      for (const cmd of cmdRes.rows) {
+        await query("UPDATE device_commands SET status = $1 WHERE id = $2", ['SENT', cmd.id]);
+      }
+
+      return res.json({
+        deviceId,
+        count: pendingCommands.length,
+        commands: pendingCommands,
+      });
+    } catch (error: any) {
+      console.error('Error serving commands:', error);
+      return res.status(500).json({ error: 'Failed to retrieve pending commands' });
+    }
+  };
+
+  router.get('/devices/:id/commands', handleGetCommands);
+  router.get('/device/:id/commands', handleGetCommands);
+
   // GLOBAL AUTOMATION ROUTES
   // GET /api/automations - Retrieve all automation rules across all devices
   router.get('/automations', async (req: Request, res: Response) => {
