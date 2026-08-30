@@ -60,11 +60,13 @@ const unsigned long TELEMETRY_INTERVAL_MS      = 2000;  // Send telemetry every 
 const unsigned long COMMAND_POLL_INTERVAL_MS    = 500;   // HTTP command poll interval
 const unsigned long HEARTBEAT_INTERVAL_MS       = 10000; // Heartbeat ping
 const unsigned long CONFIG_REFRESH_INTERVAL_MS  = 15000; // Hardware pin refresh
+const unsigned long MQTT_RECONNECT_INTERVAL_MS  = 15000; // Retry MQTT only once every 15s
 
 unsigned long lastTelemetryTime     = 0;
 unsigned long lastCommandPollTime   = 0;
 unsigned long lastHeartbeatTime     = 0;
 unsigned long lastConfigRefreshTime = 0;
+unsigned long lastMqttAttemptTime   = 0;
 
 String serverBaseUrl;
 String mqttTelemetryTopic;
@@ -109,7 +111,6 @@ void setup() {
   mqttStatusTopic     = "devices/" + String(DEVICE_ID) + "/status";
 
   connectToWiFi();
-  connectToMQTT();
   fetchHardwareConfig();
 }
 
@@ -118,15 +119,19 @@ void loop() {
     connectToWiFi();
   }
 
+  unsigned long currentMillis = millis();
+
+  // Try MQTT connection non-blockingly every 15 seconds if not connected
   if (!mqttClient.connected()) {
-    connectToMQTT();
+    if (currentMillis - lastMqttAttemptTime >= MQTT_RECONNECT_INTERVAL_MS) {
+      lastMqttAttemptTime = currentMillis;
+      connectToMQTT();
+    }
   } else {
     mqttClient.loop(); // Process incoming MQTT command messages instantly (< 5ms)
   }
 
-  unsigned long currentMillis = millis();
-
-  // 1. Fallback HTTP Poll Commands Every 100ms if MQTT Disconnected
+  // 1. Fallback HTTP Poll Commands Every 500ms if MQTT Disconnected
   if (!mqttClient.connected() && (currentMillis - lastCommandPollTime >= COMMAND_POLL_INTERVAL_MS)) {
     lastCommandPollTime = currentMillis;
     pollAndExecuteCommands();

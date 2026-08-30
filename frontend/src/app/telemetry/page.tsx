@@ -16,7 +16,12 @@ import {
   Clock,
   CheckCircle2,
   TrendingUp,
-  Filter
+  Filter,
+  Sliders,
+  Power,
+  Zap,
+  Lightbulb,
+  Volume2
 } from 'lucide-react';
 
 interface TelemetryReading {
@@ -38,6 +43,8 @@ export default function TelemetryPage() {
   const [selectedMetric, setSelectedMetric] = useState<string>('ALL');
   const [selectedTimeRange, setSelectedTimeRange] = useState<string>('24h');
   const [isLiveStreaming, setIsLiveStreaming] = useState(true);
+  const [actuatorStates, setActuatorStates] = useState<Record<string, boolean>>({});
+  const [commandSending, setCommandSending] = useState(false);
 
   const devicesRef = useRef<Device[]>(devices);
   const isLiveStreamingRef = useRef<boolean>(isLiveStreaming);
@@ -183,6 +190,24 @@ export default function TelemetryPage() {
     document.body.removeChild(link);
   };
 
+  const handleToggleActuator = async (targetDeviceId: string, gpioPin: number, currentVal: boolean) => {
+    try {
+      setCommandSending(true);
+      const nextVal = currentVal ? 0 : 1;
+      await axios.post(`${backendUrl}/api/devices/${targetDeviceId}/commands`, {
+        command_type: 'GPIO_WRITE',
+        gpio_pin: gpioPin,
+        value: nextVal,
+      });
+      setActuatorStates((prev) => ({ ...prev, [`${targetDeviceId}_${gpioPin}`]: !currentVal }));
+    } catch (err) {
+      console.error('Failed to dispatch output command:', err);
+      alert('Failed to dispatch command to hardware node.');
+    } finally {
+      setCommandSending(false);
+    }
+  };
+
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -312,6 +337,51 @@ export default function TelemetryPage() {
             </svg>
           </div>
         )}
+      </div>
+
+      {/* Hardware Output Actuator Controller Panel */}
+      <div className="dev-panel p-5 space-y-4 bg-[#121215] border border-zinc-800">
+        <div className="flex items-center justify-between border-b border-zinc-800 pb-3">
+          <div className="flex items-center space-x-2">
+            <Sliders className="h-4 w-4 text-amber-400" />
+            <h2 className="text-sm font-bold text-zinc-100">Live Hardware Actuator Output Controller</h2>
+          </div>
+          <span className="text-xs font-mono text-zinc-400">Target Node: {selectedDevice}</span>
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+          {[
+            { pin: 18, name: 'Status Indicator LED', type: 'LED', icon: Lightbulb, color: 'text-amber-400' },
+            { pin: 19, name: 'Audio Buzzer Alarm', type: 'BUZZER', icon: Volume2, color: 'text-blue-400' },
+            { pin: 25, name: 'Power Relay Switch', type: 'RELAY', icon: Power, color: 'text-emerald-400' },
+            { pin: 26, name: 'Generic Output Pin', type: 'OUTPUT', icon: Zap, color: 'text-purple-400' },
+          ].map((actuator) => {
+            const targetDev = selectedDevice !== 'ALL' ? selectedDevice : (devices[0]?.id || 'ESP32-A7F92');
+            const isOn = Boolean(actuatorStates[`${targetDev}_${actuator.pin}`]);
+            const Icon = actuator.icon;
+
+            return (
+              <div key={actuator.pin} className="dev-card p-3 font-mono flex items-center justify-between">
+                <div className="space-y-0.5">
+                  <div className="flex items-center space-x-2">
+                    <Icon className={`h-4 w-4 ${isOn ? actuator.color : 'text-zinc-500'}`} />
+                    <span className="text-xs font-bold text-zinc-200">{actuator.name}</span>
+                  </div>
+                  <span className="text-[10px] text-zinc-500 block">GPIO Pin {actuator.pin}</span>
+                </div>
+
+                <Button
+                  variant={isOn ? 'primary' : 'outline'}
+                  size="sm"
+                  disabled={commandSending}
+                  onClick={() => handleToggleActuator(targetDev, actuator.pin, isOn)}
+                >
+                  {isOn ? 'HIGH (1)' : 'LOW (0)'}
+                </Button>
+              </div>
+            );
+          })}
+        </div>
       </div>
 
       {/* Telemetry Stream Data Table */}
