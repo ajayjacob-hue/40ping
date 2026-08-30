@@ -1,0 +1,31 @@
+services:
+  # 1. Backend API & Embedded MQTT Broker Service
+  - type: web
+    name: iot-backend
+    env: node
+    region: oregon
+    buildCommand: npm install && npm run build
+    startCommand: npm run start
+    rootDir: backend
+    envVars:
+      - key: PORT
+        value: 10000
+      - key: MQTT_PORT
+        value: 1883
+      - key: NODE_ENV
+        value: production
+
+  # 2. Frontend Next.js Web Application
+  - type: web
+    name: iot-frontend
+    env: node
+    region: oregon
+    buildCommand: npm install && npm run build
+    startCommand: npm run start
+    rootDir: frontend
+    envVars:
+      - key: NEXT_PUBLIC_BACKEND_URL
+        fromService:
+          type: web
+          name: iot-backend
+          property: host

@@ -7,10 +7,12 @@ import { initDb } from './db';
 import { getLocalIpAddress } from './config/network';
 import { createEsp32Router } from './routes/esp32Api';
 import { createDeviceManagementRouter } from './routes/deviceRoutes';
+import { initMqttBroker } from './services/mqttBroker';
 
 dotenv.config();
 
 const PORT = Number(process.env.PORT) || 4000;
+const MQTT_PORT = Number(process.env.MQTT_PORT) || 1883;
 const HOST = process.env.HOST || '0.0.0.0';
 
 const app = express();
@@ -71,6 +73,7 @@ app.get('/', (req, res) => {
     system: 'IoT-to-Web Local Server for ESP32',
     serverIp: localIp,
     port: PORT,
+    mqttPort: MQTT_PORT,
     esp32ConfigEndpoint: `http://${localIp}:${PORT}/api/device/:deviceId/config`,
     esp32DataEndpoint: `http://${localIp}:${PORT}/api/device/:deviceId/data`,
   });
@@ -85,6 +88,7 @@ app.use((err: any, req: express.Request, res: express.Response, next: express.Ne
 // Start Server
 async function startServer() {
   await initDb();
+  initMqttBroker(io, MQTT_PORT);
 
   server.listen(PORT, HOST, () => {
     const localIp = getLocalIpAddress();
@@ -92,11 +96,13 @@ async function startServer() {
     console.log('🚀  IoT-to-Web LOCAL SERVER IS RUNNING!');
     console.log('==================================================');
     console.log(`📡 Listening on All Interfaces: http://${HOST}:${PORT}`);
+    console.log(`⚡ Embedded Aedes MQTT Broker:   mqtt://${localIp}:${MQTT_PORT}`);
     console.log(`🌐 LAPTOP LOCAL LAN IP ADDRESS:  http://${localIp}:${PORT}`);
     console.log('--------------------------------------------------');
     console.log(`⚡ Use this server IP in your ESP32 firmware:`);
     console.log(`   const char* SERVER_IP = "${localIp}";`);
     console.log(`   const int SERVER_PORT = ${PORT};`);
+    console.log(`   const int MQTT_PORT   = ${MQTT_PORT};`);
     console.log('==================================================\n');
   });
 }

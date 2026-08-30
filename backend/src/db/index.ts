@@ -247,7 +247,25 @@ export async function query(text: string, params: any[] = []): Promise<{ rows: a
     return { rows: items, rowCount: items.length };
   }
 
+  if (lowerSql.startsWith('select * from sensor_readings order by')) {
+    const limit = params[0] || 100;
+    const items = memoryDb.readings
+      .sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime())
+      .slice(0, limit);
+    return { rows: items, rowCount: items.length };
+  }
+
+  if (lowerSql.includes('from sensor_readings')) {
+    const items = memoryDb.readings.sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime());
+    return { rows: items, rowCount: items.length };
+  }
+
   // AUTOMATION RULES OPERATORS
+  if (lowerSql.startsWith('select * from automation_rules order by')) {
+    const rules = memoryDb.rules.sort((a, b) => b.created_at.getTime() - a.created_at.getTime());
+    return { rows: rules, rowCount: rules.length };
+  }
+
   if (lowerSql.startsWith('select * from automation_rules where device_id =')) {
     const devId = params[0];
     const rules = memoryDb.rules.filter(r => r.device_id === devId);
@@ -274,14 +292,15 @@ export async function query(text: string, params: any[] = []): Promise<{ rows: a
   }
 
   if (lowerSql.startsWith('delete from automation_rules where id =')) {
-    const id = params[0];
-    memoryDb.rules = memoryDb.rules.filter(r => r.id !== id);
+    const id = parseInt(params[0], 10) || params[0];
+    memoryDb.rules = memoryDb.rules.filter(r => String(r.id) !== String(id));
     return { rows: [], rowCount: 1 };
   }
 
   if (lowerSql.startsWith('update automation_rules set is_active =')) {
-    const [is_active, id] = params;
-    const rule = memoryDb.rules.find(r => r.id === id);
+    const is_active = Boolean(params[0]);
+    const id = parseInt(params[1], 10) || params[1];
+    const rule = memoryDb.rules.find(r => String(r.id) === String(id));
     if (rule) rule.is_active = is_active;
     return { rows: rule ? [rule] : [], rowCount: rule ? 1 : 0 };
   }

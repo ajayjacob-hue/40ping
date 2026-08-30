@@ -1,10 +1,10 @@
 import './globals.css';
 import Sidebar from '@/components/Sidebar';
-import { Wifi, ShieldCheck } from 'lucide-react';
+import { Search, Bell, ShieldCheck, Terminal, Command } from 'lucide-react';
 
 export const metadata = {
-  title: 'IoT-to-Web | Local ESP32 Dashboard',
-  description: 'Local-Only MVP for ESP32 hardware communication over Wi-Fi without cloud dependencies',
+  title: 'IoT-to-Web | Developer Infrastructure Console',
+  description: 'Industrial ESP32 IoT platform for telemetry, hardware control, and automated rules',
 };
 
 export default function RootLayout({
@@ -14,27 +14,44 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en">
-      <body className="flex min-h-screen bg-[#0b0f19] text-gray-100 antialiased overflow-x-hidden">
+      <body className="flex min-h-screen bg-[#09090b] text-zinc-100 antialiased overflow-x-hidden">
         <Sidebar />
         <div className="flex-1 flex flex-col min-w-0">
-          {/* Top Header Bar */}
-          <header className="h-16 glass-panel border-b border-gray-800 px-6 flex items-center justify-between sticky top-0 z-30">
-            <div className="flex items-center space-x-3">
-              <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold bg-blue-500/10 text-blue-400 border border-blue-500/20">
-                <Wifi className="h-3.5 w-3.5 mr-1.5 animate-pulse" />
-                LAN Isolated Network
-              </span>
+          {/* Top Developer Bar */}
+          <header className="h-12 bg-[#0c0c0e] border-b border-zinc-800/80 px-4 md:px-6 flex items-center justify-between sticky top-0 z-30 select-none">
+            {/* Breadcrumb / Section */}
+            <div className="flex items-center space-x-2 text-xs">
+              <span className="text-zinc-500">Platform</span>
+              <span className="text-zinc-600">/</span>
+              <span className="font-mono text-zinc-300">console</span>
             </div>
 
-            <div className="flex items-center space-x-4">
-              <div className="flex items-center space-x-2 text-xs text-gray-400 bg-gray-900/80 px-3 py-1.5 rounded-lg border border-gray-800">
-                <ShieldCheck className="h-4 w-4 text-emerald-400" />
-                <span>Zero Cloud Dependency</span>
+            {/* Right Tools */}
+            <div className="flex items-center space-x-3">
+              {/* Quick Search */}
+              <div className="relative hidden sm:flex items-center">
+                <Search className="h-3.5 w-3.5 absolute left-2.5 text-zinc-500" />
+                <input
+                  type="text"
+                  placeholder="Search infrastructure... (⌘K)"
+                  className="bg-zinc-900 border border-zinc-800 text-xs text-zinc-200 rounded-md pl-8 pr-3 py-1 w-56 focus:outline-none focus:border-zinc-700 font-sans"
+                />
+              </div>
+
+              {/* Status Indicator */}
+              <div className="flex items-center space-x-1.5 px-2.5 py-1 rounded bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-xs font-mono">
+                <span className="h-1.5 w-1.5 rounded-full bg-emerald-400"></span>
+                <span>Operational</span>
+              </div>
+
+              {/* Developer User Badge */}
+              <div className="h-7 w-7 rounded-md bg-zinc-800 border border-zinc-700 flex items-center justify-center text-xs font-mono font-semibold text-zinc-300">
+                DEV
               </div>
             </div>
           </header>
 
-          <main className="flex-1 p-6 md:p-8 max-w-7xl w-full mx-auto">
+          <main className="flex-1 p-4 md:p-6 max-w-7xl w-full mx-auto space-y-6">
             {children}
           </main>
         </div>

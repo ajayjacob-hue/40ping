@@ -1,30 +1,33 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useParams } from 'next/navigation';
 import Link from 'next/link';
+import StatusDot from '@/components/ui/StatusDot';
+import Badge from '@/components/ui/Badge';
+import Button from '@/components/ui/Button';
+import CodeBlock from '@/components/ui/CodeBlock';
 import {
   Cpu,
-  Thermometer,
-  Droplets,
   Activity,
   Zap,
   Power,
-  Volume2,
-  Sliders,
   Clock,
   Wifi,
   Settings,
   Terminal,
   FileCode2,
-  Ruler,
-  Sun,
-  MousePointer,
-  Gauge,
+  Sliders,
+  Radio,
+  Copy,
+  Check,
+  BarChart3,
+  Layers,
+  Send,
+  Database
 } from 'lucide-react';
 import axios from 'axios';
 import { io, Socket } from 'socket.io-client';
-import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts';
 import { getBackendUrl, Device, Component, SensorReading, DeviceCommand } from '@/lib/api';
 
 export default function DeviceDetailPage() {
@@ -35,30 +38,36 @@ export default function DeviceDetailPage() {
   const [components, setComponents] = useState<Component[]>([]);
   const [readings, setReadings] = useState<SensorReading[]>([]);
   const [commands, setCommands] = useState<DeviceCommand[]>([]);
+  const [rules, setRules] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
 
-  // Dynamic telemetry state map: { temperature: 28.4, humidity: 64, distance: 15.2, motion: true, ... }
+  // Active Tab: 'overview' | 'telemetry' | 'hardware' | 'automations' | 'commands' | 'logs' | 'firmware'
+  const [activeTab, setActiveTab] = useState<string>('overview');
+
+  // Dynamic telemetry state map
   const [liveTelemetry, setLiveTelemetry] = useState<{ [key: string]: any }>({});
+  const [copiedToken, setCopiedToken] = useState(false);
 
-  // Dynamic output actuator states: { [gpio]: value }
-  const [actuatorStates, setActuatorStates] = useState<{ [gpio: number]: number }>({});
+  // Manual Command Form
+  const [targetGpio, setTargetGpio] = useState<number>(18);
+  const [targetValue, setTargetValue] = useState<number>(1);
+  const [commandSending, setCommandSending] = useState(false);
 
-  const [lastSeenTime, setLastSeenTime] = useState<string>('Just now');
-  const [chartData, setChartData] = useState<any[]>([]);
+  const backendUrl = getBackendUrl();
 
-  // 1. Fetch initial device data from backend
   const fetchDeviceData = async () => {
     try {
-      const res = await axios.get(`${getBackendUrl()}/api/devices/${deviceId}`);
+      const res = await axios.get(`${backendUrl}/api/devices/${deviceId}`);
       setDevice(res.data.device);
       const comps: Component[] = res.data.components || [];
       setComponents(comps);
       setCommands(res.data.commands || []);
+      setRules(res.data.rules || []);
 
       const historicalReadings: SensorReading[] = res.data.readings || [];
       setReadings(historicalReadings);
 
-      // Extract latest value for each telemetry key
+      // Extract latest telemetry map
       const latestMap: { [key: string]: any } = {};
       historicalReadings.forEach((r) => {
         if (latestMap[r.reading_type] === undefined) {
@@ -66,542 +75,467 @@ export default function DeviceDetailPage() {
         }
       });
       setLiveTelemetry(latestMap);
-
-      // Format chart history dynamically
-      const pointsMap: { [time: string]: any } = {};
-      historicalReadings.slice(0, 30).reverse().forEach((r) => {
-        const t = new Date(r.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-        if (!pointsMap[t]) pointsMap[t] = { time: t };
-        pointsMap[t][r.reading_type] = Number(r.value);
-      });
-      setChartData(Object.values(pointsMap));
     } catch (err) {
-      console.error('Failed to load device details:', err);
+      console.error('Failed to load device detail:', err);
     } finally {
       setLoading(false);
     }
   };
 
-  // 2. Setup Socket.IO Real-Time Connection
   useEffect(() => {
     fetchDeviceData();
 
-    const socketUrl = getBackendUrl();
-    const socket: Socket = io(socketUrl);
+    const socket: Socket = io(backendUrl);
 
     socket.on('connect', () => {
-      console.log('Connected to real-time Socket.IO server');
       socket.emit('join_device', deviceId);
     });
 
-    // Real-time telemetry event handler (merges ANY dynamic telemetry keys sent by ESP32)
     socket.on('device_telemetry', (data: any) => {
       if (data.deviceId === deviceId && data.readings) {
         const r = data.readings;
+        setLiveTelemetry((prev) => ({ ...prev, ...r }));
+        setDevice((prev) => (prev ? { ...prev, status: 'ONLINE', last_seen: new Date().toISOString() } : prev));
 
-        setLiveTelemetry((prev) => ({
-          ...prev,
-          ...r,
-        }));
-
-        setLastSeenTime('Just now');
-        setDevice((prev) => (prev ? { ...prev, status: 'ONLINE' } : prev));
-
-        // Append to real-time chart dynamically
-        const newTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-        setChartData((prev) => {
-          const newPoint: any = { time: newTime, ...r };
-          const updated = [...prev, newPoint];
-          return updated.slice(-20);
-        });
+        // Append to historical readings
+        const newReadings: SensorReading[] = [];
+        for (const [key, val] of Object.entries(r)) {
+          if (key === 'token' || key === 'deviceId') continue;
+          newReadings.push({
+            id: Date.now(),
+            device_id: deviceId,
+            component_type: key.toUpperCase(),
+            reading_type: key.toLowerCase(),
+            value: typeof val === 'number' ? val : typeof val === 'boolean' ? (val ? 1 : 0) : 0,
+            raw_data: JSON.stringify({ [key]: val }),
+            timestamp: new Date().toISOString(),
+          });
+        }
+        setReadings((prev) => [...newReadings, ...prev].slice(0, 100));
       }
     });
 
-    // Real-time command ACK event handler
-    socket.on('command_executed', (cmd: DeviceCommand) => {
-      setCommands((prev) => [cmd, ...prev.slice(0, 15)]);
-      setActuatorStates((prev) => ({
-        ...prev,
-        [cmd.gpio_pin]: cmd.value,
-      }));
+    socket.on('device_heartbeat', (data: any) => {
+      if (data.deviceId === deviceId) {
+        setDevice((prev) =>
+          prev ? { ...prev, status: data.status as 'ONLINE' | 'OFFLINE', ip_address: data.ipAddress || prev.ip_address } : prev
+        );
+      }
+    });
+
+    socket.on('command_created', (cmd: DeviceCommand) => {
+      if (cmd.device_id === deviceId) {
+        setCommands((prev) => [cmd, ...prev]);
+      }
     });
 
     return () => {
-      socket.emit('leave_device', deviceId);
       socket.disconnect();
     };
-  }, [deviceId]);
+  }, [deviceId, backendUrl]);
 
-  // Send output actuation command (e.g. LED ON/OFF, Servo angle)
-  const sendActuationCommand = async (commandType: string, gpioPin: number, value: number) => {
+  // Send Manual Actuator Command
+  const handleSendCommand = async (e: React.FormEvent) => {
+    e.preventDefault();
     try {
-      const res = await axios.post(`${getBackendUrl()}/api/devices/${deviceId}/commands`, {
-        command_type: commandType,
-        gpio_pin: gpioPin,
-        value: value,
+      setCommandSending(true);
+      await axios.post(`${backendUrl}/api/devices/${deviceId}/commands`, {
+        command_type: 'GPIO_WRITE',
+        gpio_pin: targetGpio,
+        value: targetValue,
       });
-
-      setActuatorStates((prev) => ({
-        ...prev,
-        [gpioPin]: value,
-      }));
-
-      setCommands((prev) => [res.data.command, ...prev.slice(0, 15)]);
+      fetchDeviceData();
     } catch (err) {
-      alert('Failed to send actuation command.');
+      alert('Failed to dispatch command.');
+    } finally {
+      setCommandSending(false);
     }
   };
 
-  // Helper to render dynamic telemetry gauge card for any key
-  const renderTelemetryCard = (key: string, val: any) => {
-    const lowerKey = key.toLowerCase();
-
-    if (lowerKey === 'temperature') {
-      return (
-        <div key={key} className="glass-panel p-5 rounded-2xl border border-gray-800 relative overflow-hidden">
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-semibold text-gray-400 uppercase">Temperature</span>
-            <div className="p-2 bg-amber-500/10 text-amber-400 rounded-xl border border-amber-500/20">
-              <Thermometer className="h-5 w-5" />
-            </div>
-          </div>
-          <div className="mt-4">
-            <div className="flex items-baseline space-x-1">
-              <span className="text-3xl font-bold text-white">{val !== undefined ? Number(val).toFixed(1) : '--'}</span>
-              <span className="text-sm font-semibold text-amber-400">°C</span>
-            </div>
-            <p className="text-[11px] text-gray-500 mt-1">DHT11 Sensor</p>
-          </div>
-        </div>
-      );
-    }
-
-    if (lowerKey === 'humidity') {
-      return (
-        <div key={key} className="glass-panel p-5 rounded-2xl border border-gray-800 relative overflow-hidden">
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-semibold text-gray-400 uppercase">Humidity</span>
-            <div className="p-2 bg-blue-500/10 text-blue-400 rounded-xl border border-blue-500/20">
-              <Droplets className="h-5 w-5" />
-            </div>
-          </div>
-          <div className="mt-4">
-            <div className="flex items-baseline space-x-1">
-              <span className="text-3xl font-bold text-white">{val !== undefined ? Number(val).toFixed(1) : '--'}</span>
-              <span className="text-sm font-semibold text-blue-400">%</span>
-            </div>
-            <p className="text-[11px] text-gray-500 mt-1">DHT11 Sensor</p>
-          </div>
-        </div>
-      );
-    }
-
-    if (lowerKey === 'distance') {
-      return (
-        <div key={key} className="glass-panel p-5 rounded-2xl border border-gray-800 relative overflow-hidden">
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-semibold text-gray-400 uppercase">Ultrasonic Distance</span>
-            <div className="p-2 bg-purple-500/10 text-purple-400 rounded-xl border border-purple-500/20">
-              <Ruler className="h-5 w-5" />
-            </div>
-          </div>
-          <div className="mt-4">
-            <div className="flex items-baseline space-x-1">
-              <span className="text-3xl font-bold text-white">{val !== undefined ? Number(val).toFixed(1) : '--'}</span>
-              <span className="text-sm font-semibold text-purple-400">cm</span>
-            </div>
-            <p className="text-[11px] text-gray-500 mt-1">HC-SR04 Sensor</p>
-          </div>
-        </div>
-      );
-    }
-
-    if (lowerKey === 'motion') {
-      const isMotion = Boolean(val);
-      return (
-        <div key={key} className="glass-panel p-5 rounded-2xl border border-gray-800 relative overflow-hidden">
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-semibold text-gray-400 uppercase">PIR Motion</span>
-            <div className="p-2 bg-emerald-500/10 text-emerald-400 rounded-xl border border-emerald-500/20">
-              <Activity className="h-5 w-5" />
-            </div>
-          </div>
-          <div className="mt-4">
-            {isMotion ? (
-              <span className="inline-flex items-center px-3 py-1 rounded-xl text-sm font-bold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
-                🏃 DETECTED
-              </span>
-            ) : (
-              <span className="inline-flex items-center px-3 py-1 rounded-xl text-sm font-semibold bg-gray-800 text-gray-400 border border-gray-700">
-                CLEAR
-              </span>
-            )}
-            <p className="text-[11px] text-gray-500 mt-2">PIR Sensor</p>
-          </div>
-        </div>
-      );
-    }
-
-    if (lowerKey === 'light') {
-      return (
-        <div key={key} className="glass-panel p-5 rounded-2xl border border-gray-800 relative overflow-hidden">
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-semibold text-gray-400 uppercase">Light Intensity</span>
-            <div className="p-2 bg-amber-500/10 text-amber-400 rounded-xl border border-amber-500/20">
-              <Sun className="h-5 w-5" />
-            </div>
-          </div>
-          <div className="mt-4">
-            <div className="flex items-baseline space-x-1">
-              <span className="text-3xl font-bold text-white">{val !== undefined ? val : '--'}</span>
-              <span className="text-sm font-semibold text-amber-400">lux</span>
-            </div>
-            <p className="text-[11px] text-gray-500 mt-1">LDR Sensor</p>
-          </div>
-        </div>
-      );
-    }
-
-    if (lowerKey === 'button') {
-      const isPressed = Number(val) === 1 || Boolean(val);
-      return (
-        <div key={key} className="glass-panel p-5 rounded-2xl border border-gray-800 relative overflow-hidden">
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-semibold text-gray-400 uppercase">Push Button</span>
-            <div className="p-2 bg-blue-500/10 text-blue-400 rounded-xl border border-blue-500/20">
-              <MousePointer className="h-5 w-5" />
-            </div>
-          </div>
-          <div className="mt-4">
-            {isPressed ? (
-              <span className="inline-flex items-center px-3 py-1 rounded-xl text-sm font-bold bg-blue-500/20 text-blue-400 border border-blue-500/30">
-                🔘 PRESSED
-              </span>
-            ) : (
-              <span className="inline-flex items-center px-3 py-1 rounded-xl text-sm font-semibold bg-gray-800 text-gray-400 border border-gray-700">
-                RELEASED
-              </span>
-            )}
-            <p className="text-[11px] text-gray-500 mt-2">Digital Button</p>
-          </div>
-        </div>
-      );
-    }
-
-    // Generic fallback telemetry card for any custom sensor key
-    return (
-      <div key={key} className="glass-panel p-5 rounded-2xl border border-gray-800 relative overflow-hidden">
-        <div className="flex items-center justify-between">
-          <span className="text-xs font-semibold text-gray-400 uppercase">{key}</span>
-          <div className="p-2 bg-indigo-500/10 text-indigo-400 rounded-xl border border-indigo-500/20">
-            <Gauge className="h-5 w-5" />
-          </div>
-        </div>
-        <div className="mt-4">
-          <div className="flex items-baseline space-x-1">
-            <span className="text-3xl font-bold text-white">{typeof val === 'boolean' ? (val ? 'TRUE' : 'FALSE') : val}</span>
-          </div>
-          <p className="text-[11px] text-gray-500 mt-1">Telemetry Signal</p>
-        </div>
-      </div>
-    );
+  const copyToken = () => {
+    if (!device) return;
+    navigator.clipboard.writeText(device.token);
+    setCopiedToken(true);
+    setTimeout(() => setCopiedToken(false), 2000);
   };
 
-  if (loading) {
-    return <div className="p-8 text-center text-sm text-gray-400">Loading live telemetry stream...</div>;
-  }
+  // Output Actuators list for Quick Control
+  const actuatorComponents = useMemo(() => {
+    return components.filter((c) => c.category === 'OUTPUT' || ['LED', 'BUZZER', 'RELAY', 'GENERIC_OUTPUT'].includes(c.type));
+  }, [components]);
 
-  if (!device) {
-    return (
-      <div className="glass-panel p-8 rounded-2xl text-center">
-        <Cpu className="h-12 w-12 text-red-400 mx-auto mb-2" />
-        <h2 className="text-lg font-bold text-white">Device Not Found</h2>
-        <p className="text-xs text-gray-400 mt-1 mb-4">No device registered with ID: {deviceId}</p>
-        <Link href="/devices" className="px-4 py-2 bg-blue-600 text-white rounded-xl text-xs font-medium">
-          Back to Devices List
-        </Link>
-      </div>
-    );
-  }
+  // SVG Chart points
+  const chartPoints = useMemo(() => {
+    const list = [...readings].reverse();
+    if (list.length < 2) return '';
+    const width = 750;
+    const height = 150;
+    const vals = list.map((r) => Number(r.value) || 0);
+    const min = Math.min(...vals);
+    const max = Math.max(...vals);
+    const range = max - min || 1;
 
-  const getActiveSensorKeys = (comps: Component[]): Set<string> => {
-    const activeKeys = new Set<string>();
-
-    comps.forEach((comp) => {
-      if (comp.category === 'OUTPUT') return;
-
-      const typeUpper = (comp.type || '').toUpperCase();
-      const nameLower = (comp.name || '').toLowerCase();
-
-      if (typeUpper.includes('DHT') || typeUpper.includes('TEMP') || nameLower.includes('temp') || nameLower.includes('dht')) {
-        activeKeys.add('temperature');
-        activeKeys.add('humidity');
-      }
-      if (typeUpper.includes('PIR') || typeUpper.includes('MOTION') || nameLower.includes('motion')) {
-        activeKeys.add('motion');
-      }
-      if (typeUpper.includes('HC-SR04') || typeUpper.includes('DISTANCE') || typeUpper.includes('ULTRASONIC') || nameLower.includes('distance')) {
-        activeKeys.add('distance');
-      }
-      if (typeUpper.includes('LDR') || typeUpper.includes('LIGHT') || nameLower.includes('light')) {
-        activeKeys.add('light');
-      }
-      if (typeUpper.includes('BUTTON') || nameLower.includes('button')) {
-        activeKeys.add('button');
-      }
-
-      if (comp.type) activeKeys.add(comp.type.toLowerCase().replace(/\s+/g, '_'));
-      if (comp.name) activeKeys.add(comp.name.toLowerCase().replace(/\s+/g, '_'));
+    const points = list.map((item, idx) => {
+      const x = (idx / (list.length - 1)) * width;
+      const y = height - (((Number(item.value) || 0) - min) / range) * (height - 20) - 10;
+      return `${x},${y}`;
     });
 
-    return activeKeys;
-  };
+    return `M ${points.join(' L ')}`;
+  }, [readings]);
 
-  const activeSensorKeys = getActiveSensorKeys(components);
-  const activeTelemetryEntries = Object.entries(liveTelemetry).filter(([key]) =>
-    activeSensorKeys.has(key.toLowerCase())
-  );
-
-  const outputComponents = components.filter((c) => c.category === 'OUTPUT' || c.type === 'LED' || c.type === 'BUZZER' || c.type === 'SERVO' || c.type === 'GENERIC_OUTPUT');
+  if (loading || !device) {
+    return <div className="dev-panel p-8 text-center text-xs text-zinc-400">Loading device console...</div>;
+  }
 
   return (
-    <div className="space-y-8">
-      {/* Device Title Header & Quick Navigation Bar */}
-      <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+    <div className="space-y-6">
+      {/* Header Bar */}
+      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 border-b border-zinc-800/80 pb-4">
         <div>
           <div className="flex items-center space-x-3">
-            <h1 className="text-2xl font-bold text-white tracking-tight">{device.name}</h1>
-            <span className="font-mono text-xs text-blue-300 px-2.5 py-1 bg-blue-950/60 border border-blue-800/60 rounded-lg">
+            <h1 className="text-xl font-bold text-zinc-100 tracking-tight">{device.name}</h1>
+            <span className="font-mono text-xs text-zinc-400 font-semibold px-2 py-0.5 bg-zinc-900 border border-zinc-800 rounded">
               {device.id}
             </span>
-            {device.status === 'ONLINE' ? (
-              <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
-                <span className="h-2 w-2 rounded-full bg-emerald-400 animate-pulse mr-1.5"></span>
-                ONLINE
-              </span>
-            ) : (
-              <span className="px-2.5 py-1 rounded-full text-xs font-semibold bg-gray-800 text-gray-400">
-                OFFLINE
-              </span>
-            )}
+            <StatusDot status={device.status} />
           </div>
-          <p className="text-xs text-gray-400 mt-1 flex items-center">
-            <Clock className="h-3.5 w-3.5 mr-1 text-gray-500" />
-            Last telemetry update: <span className="text-gray-300 ml-1">{lastSeenTime}</span>
+          <p className="text-xs text-zinc-400 mt-1">
+            Last seen {device.last_seen ? new Date(device.last_seen).toLocaleTimeString() : 'Recently'} • IP: {device.ip_address || '---'}
           </p>
         </div>
 
-        {/* Action Tabs */}
-        <div className="flex items-center space-x-2 flex-wrap">
-          <Link
-            href={`/devices/${deviceId}/hardware`}
-            className="flex items-center space-x-1.5 px-3.5 py-2 bg-gray-800 hover:bg-gray-700 text-gray-200 rounded-xl text-xs font-medium border border-gray-700"
-          >
-            <Settings className="h-3.5 w-3.5 text-blue-400" />
-            <span>Hardware Pins</span>
+        <div className="flex items-center space-x-2">
+          <Link href={`/devices/${deviceId}/hardware`}>
+            <Button variant="secondary" size="sm" icon={<Sliders className="h-3.5 w-3.5" />}>
+              Configure Hardware
+            </Button>
           </Link>
-
-          <Link
-            href={`/devices/${deviceId}/automations`}
-            className="flex items-center space-x-1.5 px-3.5 py-2 bg-gray-800 hover:bg-gray-700 text-gray-200 rounded-xl text-xs font-medium border border-gray-700"
-          >
-            <Zap className="h-3.5 w-3.5 text-amber-400" />
-            <span>Automations</span>
-          </Link>
-
-          <Link
-            href={`/devices/${deviceId}/firmware`}
-            className="flex items-center space-x-1.5 px-3.5 py-2 bg-purple-600 hover:bg-purple-500 text-white rounded-xl text-xs font-semibold shadow-md"
-          >
-            <FileCode2 className="h-3.5 w-3.5" />
-            <span>Firmware Generator</span>
+          <Link href={`/devices/${deviceId}/firmware`}>
+            <Button variant="outline" size="sm" icon={<FileCode2 className="h-3.5 w-3.5" />}>
+              Firmware Code
+            </Button>
           </Link>
         </div>
       </div>
 
-      {/* DYNAMIC SENSOR TELEMETRY CARDS GRID */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
-        {components.filter((c) => c.category !== 'OUTPUT').length === 0 ? (
-          <div className="col-span-full glass-panel p-6 rounded-2xl border border-gray-800 text-center text-xs text-gray-400">
-            No input sensors configured on this device yet. Click{' '}
-            <Link href={`/devices/${deviceId}/hardware`} className="text-blue-400 font-semibold underline">
-              Hardware Pins
-            </Link>{' '}
-            to assign your sensors.
-          </div>
-        ) : activeTelemetryEntries.length === 0 ? (
-          <div className="col-span-full glass-panel p-6 rounded-2xl border border-gray-800 text-center text-xs text-gray-400">
-            Waiting for live telemetry stream from configured sensors...
-          </div>
-        ) : (
-          activeTelemetryEntries.map(([key, val]) => renderTelemetryCard(key, val))
-        )}
+      {/* Developer Console Tabs */}
+      <div className="flex items-center space-x-1 border-b border-zinc-800 text-xs font-medium">
+        {[
+          { id: 'overview', label: 'Overview', icon: Cpu },
+          { id: 'telemetry', label: 'Telemetry Stream', icon: Activity },
+          { id: 'hardware', label: 'Hardware Pins', icon: Sliders },
+          { id: 'automations', label: 'Automation Rules', icon: Zap },
+          { id: 'commands', label: 'Actuator Commands', icon: Power },
+          { id: 'logs', label: 'Logs', icon: Terminal },
+          { id: 'firmware', label: 'Firmware & Provision', icon: Radio },
+        ].map((tab) => {
+          const Icon = tab.icon;
+          const isActive = activeTab === tab.id;
+          return (
+            <button
+              key={tab.id}
+              onClick={() => setActiveTab(tab.id)}
+              className={`flex items-center space-x-1.5 px-3 py-2 border-b-2 transition-colors ${
+                isActive
+                  ? 'border-blue-500 text-zinc-100 font-semibold bg-zinc-900/40'
+                  : 'border-transparent text-zinc-400 hover:text-zinc-200 hover:bg-zinc-900/20'
+              }`}
+            >
+              <Icon className="h-3.5 w-3.5" />
+              <span>{tab.label}</span>
+            </button>
+          );
+        })}
       </div>
 
-      {/* Real-time Telemetry Line Chart */}
-      <div className="glass-panel p-6 rounded-2xl border border-gray-800">
-        <div className="flex items-center justify-between mb-4">
+      {/* TAB 1: OVERVIEW */}
+      {activeTab === 'overview' && (
+        <div className="space-y-6">
+          {/* Current Telemetry Readings Grid */}
           <div>
-            <h3 className="font-semibold text-white">Live Environmental History</h3>
-            <p className="text-xs text-gray-400">WebSocket auto-streamed sensor readings</p>
-          </div>
-          <span className="text-xs font-mono text-emerald-400 flex items-center">
-            <span className="h-2 w-2 rounded-full bg-emerald-400 animate-pulse mr-1.5"></span> Live Feed
-          </span>
-        </div>
-
-        <div className="h-64 w-full">
-          {chartData.length === 0 ? (
-            <div className="h-full flex items-center justify-center text-xs text-gray-500">
-              Waiting for incoming sensor telemetry packets...
-            </div>
-          ) : (
-            <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={chartData}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#1F2937" />
-                <XAxis dataKey="time" stroke="#6B7280" fontSize={11} />
-                <YAxis stroke="#6B7280" fontSize={11} />
-                <Tooltip
-                  contentStyle={{ backgroundColor: '#111827', borderColor: '#374151', borderRadius: '12px', fontSize: '12px' }}
-                />
-                {activeSensorKeys.has('temperature') && (
-                  <Line type="monotone" dataKey="temperature" name="Temperature (°C)" stroke="#F59E0B" strokeWidth={2.5} dot={false} />
-                )}
-                {activeSensorKeys.has('humidity') && (
-                  <Line type="monotone" dataKey="humidity" name="Humidity (%)" stroke="#3B82F6" strokeWidth={2.5} dot={false} />
-                )}
-                {activeSensorKeys.has('distance') && (
-                  <Line type="monotone" dataKey="distance" name="Distance (cm)" stroke="#A855F7" strokeWidth={2.5} dot={false} />
-                )}
-                {activeSensorKeys.has('light') && (
-                  <Line type="monotone" dataKey="light" name="Light (lux)" stroke="#EAB308" strokeWidth={2.5} dot={false} />
-                )}
-              </LineChart>
-            </ResponsiveContainer>
-          )}
-        </div>
-      </div>
-
-      {/* DYNAMIC MANUAL ACTUATOR CONTROLS & COMMAND STREAM GRID */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Dynamic Manual Controls */}
-        <div className="glass-panel p-6 rounded-2xl border border-gray-800 space-y-5">
-          <div>
-            <h3 className="font-semibold text-white flex items-center">
-              <Power className="h-4 w-4 mr-2 text-blue-400" /> Manual Hardware Control Panel
+            <h3 className="text-xs font-mono font-semibold text-zinc-400 uppercase tracking-wider mb-3">
+              Current Telemetry Metrics
             </h3>
-            <p className="text-xs text-gray-400 mt-0.5">Command physical output GPIO pins over Wi-Fi</p>
-          </div>
-
-          <div className="space-y-4">
-            {outputComponents.length === 0 ? (
-              <div className="p-6 text-center border border-dashed border-gray-800 rounded-xl text-xs text-gray-400">
-                No output actuators configured on this device yet. Click{' '}
-                <Link href={`/devices/${deviceId}/hardware`} className="text-blue-400 font-semibold underline">
-                  Hardware Pins
-                </Link>{' '}
-                to assign your LEDs, Buzzers, Relays, or Motors.
+            {Object.keys(liveTelemetry).length === 0 ? (
+              <div className="dev-panel p-6 text-center text-xs text-zinc-500 font-mono">
+                No active telemetry payloads received yet from hardware node.
               </div>
             ) : (
-              outputComponents.map((comp) => {
-                const pinState = actuatorStates[comp.gpio_pin] ?? 0;
-                return (
-                  <div key={comp.id || comp.gpio_pin} className="p-4 bg-gray-900/80 rounded-xl border border-gray-800 flex items-center justify-between">
-                    <div>
-                      <span className="font-semibold text-sm text-white block">{comp.name}</span>
-                      <span className="text-xs text-blue-300 font-mono">GPIO {comp.gpio_pin} ({comp.type})</span>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+                {Object.entries(liveTelemetry).map(([key, val]) => (
+                  <div key={key} className="dev-card p-4 space-y-1">
+                    <span className="text-[10px] font-mono text-zinc-400 uppercase font-semibold">{key}</span>
+                    <div className="text-xl font-bold text-zinc-100 font-mono">
+                      {typeof val === 'boolean' ? (val ? 'DETECTED' : 'CLEAR') : String(val)}
                     </div>
-                    {comp.type === 'SERVO' ? (
-                      <div className="w-48 space-y-1">
-                        <div className="flex justify-between text-[11px]">
-                          <span className="text-gray-400">Angle:</span>
-                          <span className="font-mono text-blue-400 font-bold">{pinState}°</span>
-                        </div>
-                        <input
-                          type="range"
-                          min="0"
-                          max="180"
-                          value={pinState}
-                          onChange={(e) => setActuationStateLocally(comp.gpio_pin, Number(e.target.value))}
-                          onMouseUp={(e) => sendActuationCommand('SERVO_ANGLE', comp.gpio_pin, Number((e.target as HTMLInputElement).value))}
-                          className="w-full h-1.5 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-blue-500"
-                        />
-                      </div>
-                    ) : (
-                      <div className="flex items-center space-x-2">
-                        <button
-                          onClick={() => sendActuationCommand('GPIO_WRITE', comp.gpio_pin, 1)}
-                          className={`px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-all ${
-                            pinState === 1 ? 'bg-emerald-600 text-white shadow-lg glow-green' : 'bg-gray-800 text-gray-300 hover:bg-gray-700'
-                          }`}
-                        >
-                          ON
-                        </button>
-                        <button
-                          onClick={() => sendActuationCommand('GPIO_WRITE', comp.gpio_pin, 0)}
-                          className={`px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-all ${
-                            pinState === 0 ? 'bg-red-600/30 text-red-300 border border-red-500/30' : 'bg-gray-800 text-gray-300 hover:bg-gray-700'
-                          }`}
-                        >
-                          OFF
-                        </button>
-                      </div>
-                    )}
                   </div>
-                );
-              })
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Real-Time SVG Telemetry Trend Chart */}
+          <div className="dev-panel p-5 space-y-3">
+            <div className="flex items-center justify-between border-b border-zinc-800 pb-2">
+              <div className="flex items-center space-x-2">
+                <BarChart3 className="h-4 w-4 text-blue-400" />
+                <h3 className="text-xs font-bold text-zinc-100">Telemetry Trend Stream</h3>
+              </div>
+              <span className="text-[11px] font-mono text-zinc-500">Datapoints: {readings.length}</span>
+            </div>
+
+            {chartPoints ? (
+              <div className="h-40 relative pt-2">
+                <svg viewBox="0 0 750 150" className="w-full h-full overflow-visible">
+                  <path d={chartPoints} fill="none" stroke="#3b82f6" strokeWidth="2" strokeLinecap="round" />
+                </svg>
+              </div>
+            ) : (
+              <div className="h-32 flex flex-col items-center justify-center text-xs text-zinc-500">
+                <Database className="h-5 w-5 text-zinc-600 mb-1" />
+                <span>Waiting for telemetry stream...</span>
+              </div>
+            )}
+          </div>
+
+          {/* Device Information Card */}
+          <div className="dev-panel p-5 space-y-4">
+            <h3 className="text-xs font-mono font-semibold text-zinc-400 uppercase tracking-wider">
+              Node Infrastructure Metadata
+            </h3>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 font-mono text-xs">
+              <div className="p-3 bg-zinc-950 rounded border border-zinc-800 space-y-1">
+                <span className="text-zinc-500 text-[10px]">DEVICE ID</span>
+                <p className="text-zinc-200 font-bold">{device.id}</p>
+              </div>
+
+              <div className="p-3 bg-zinc-950 rounded border border-zinc-800 space-y-1">
+                <span className="text-zinc-500 text-[10px]">FIRMWARE VERSION</span>
+                <p className="text-zinc-200 font-bold">v1.0.0 (MQTT Hybrid)</p>
+              </div>
+
+              <div className="p-3 bg-zinc-950 rounded border border-zinc-800 space-y-1">
+                <span className="text-zinc-500 text-[10px]">AUTH TOKEN</span>
+                <div className="flex items-center justify-between text-blue-300">
+                  <span className="truncate max-w-[140px]">{device.token}</span>
+                  <button onClick={copyToken} className="hover:text-zinc-100">
+                    {copiedToken ? <Check className="h-3.5 w-3.5 text-emerald-400" /> : <Copy className="h-3.5 w-3.5" />}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* TAB 2: TELEMETRY */}
+      {activeTab === 'telemetry' && (
+        <div className="dev-panel overflow-hidden">
+          <div className="p-4 border-b border-zinc-800 flex items-center justify-between">
+            <h3 className="text-xs font-bold text-zinc-100">Real-Time Ingestion Logs</h3>
+            <span className="text-xs font-mono text-zinc-400">Total: {readings.length}</span>
+          </div>
+          <table className="w-full text-left dev-table">
+            <thead>
+              <tr>
+                <th>Timestamp</th>
+                <th>Component</th>
+                <th>Reading Type</th>
+                <th>Value</th>
+                <th>Raw Payload</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-zinc-800/60 text-xs font-mono">
+              {readings.slice(0, 30).map((r, idx) => (
+                <tr key={idx} className="hover:bg-zinc-800/40">
+                  <td className="text-zinc-400">{new Date(r.timestamp).toLocaleTimeString()}</td>
+                  <td className="text-zinc-200 font-semibold">{r.component_type}</td>
+                  <td>
+                    <Badge variant="mono">{r.reading_type}</Badge>
+                  </td>
+                  <td className="text-emerald-400 font-bold">{r.value}</td>
+                  <td className="text-zinc-500 truncate max-w-xs">{r.raw_data}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {/* TAB 3: HARDWARE PINS */}
+      {activeTab === 'hardware' && (
+        <div className="dev-panel p-5 space-y-4">
+          <div className="flex items-center justify-between border-b border-zinc-800 pb-3">
+            <div>
+              <h3 className="text-sm font-bold text-zinc-100">GPIO Component Pin Mappings</h3>
+              <p className="text-xs text-zinc-400">Configured hardware sensors and output actuators</p>
+            </div>
+            <Link href={`/devices/${deviceId}/hardware`}>
+              <Button variant="primary" size="sm" icon={<Sliders className="h-3.5 w-3.5" />}>
+                Edit Pin Mappings
+              </Button>
+            </Link>
+          </div>
+
+          <div className="divide-y divide-zinc-800">
+            {components.map((comp) => (
+              <div key={comp.id} className="py-3 flex items-center justify-between font-mono text-xs">
+                <div>
+                  <div className="font-bold text-zinc-100">{comp.name}</div>
+                  <div className="text-zinc-400 text-[11px]">{comp.type}</div>
+                </div>
+                <div className="flex items-center space-x-3">
+                  <Badge variant="mono">GPIO {comp.gpio_pin}</Badge>
+                  {comp.gpio_secondary !== -1 && <Badge variant="mono">Echo GPIO {comp.gpio_secondary}</Badge>}
+                  <Badge variant={comp.category === 'OUTPUT' ? 'info' : 'neutral'}>{comp.category}</Badge>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* TAB 4: AUTOMATIONS */}
+      {activeTab === 'automations' && (
+        <div className="dev-panel p-5 space-y-4">
+          <div className="flex items-center justify-between border-b border-zinc-800 pb-3">
+            <h3 className="text-sm font-bold text-zinc-100">Automation Rules for {device.name}</h3>
+            <Link href="/automation">
+              <Button variant="primary" size="sm" icon={<Zap className="h-3.5 w-3.5" />}>
+                Rule Studio
+              </Button>
+            </Link>
+          </div>
+
+          <div className="divide-y divide-zinc-800">
+            {rules.length === 0 ? (
+              <div className="py-6 text-center text-xs text-zinc-500">No automation rules configured for this node.</div>
+            ) : (
+              rules.map((rule: any) => (
+                <div key={rule.id} className="py-3 flex items-center justify-between text-xs">
+                  <div>
+                    <div className="font-bold text-zinc-100">{rule.name}</div>
+                    <div className="font-mono text-zinc-400 text-[11px] mt-0.5">
+                      IF {rule.sensor_component} [{rule.condition}] {rule.trigger_value} ➔ SET {rule.action_component} = {rule.action_value}
+                    </div>
+                  </div>
+                  <Badge variant={rule.is_active ? 'success' : 'neutral'}>
+                    {rule.is_active ? 'Active' : 'Disabled'}
+                  </Badge>
+                </div>
+              ))
             )}
           </div>
         </div>
+      )}
 
-        {/* Real-time Command Execution Log */}
-        <div className="glass-panel p-6 rounded-2xl border border-gray-800 flex flex-col justify-between">
-          <div>
-            <h3 className="font-semibold text-white flex items-center mb-1">
-              <Terminal className="h-4 w-4 mr-2 text-emerald-400" /> Output Command Execution Stream
-            </h3>
-            <p className="text-xs text-gray-400 mb-4">Real-time status of commands polled and ACKed by ESP32</p>
+      {/* TAB 5: ACTUATOR COMMANDS */}
+      {activeTab === 'commands' && (
+        <div className="space-y-6">
+          <div className="dev-panel p-5 space-y-4">
+            <h3 className="text-sm font-bold text-zinc-100">Manual Actuator Controller</h3>
+            <form onSubmit={handleSendCommand} className="flex flex-wrap items-center gap-3">
+              <div>
+                <label className="block text-[11px] font-mono text-zinc-400 mb-1">Target GPIO Pin</label>
+                <select
+                  value={targetGpio}
+                  onChange={(e) => setTargetGpio(Number(e.target.value))}
+                  className="bg-zinc-900 border border-zinc-700 text-xs text-zinc-100 rounded p-2 font-mono"
+                >
+                  {actuatorComponents.length > 0 ? (
+                    actuatorComponents.map((c) => (
+                      <option key={c.id} value={c.gpio_pin}>
+                        GPIO {c.gpio_pin} ({c.name})
+                      </option>
+                    ))
+                  ) : (
+                    <option value={18}>GPIO 18 (Default LED)</option>
+                  )}
+                </select>
+              </div>
 
-            <div className="space-y-2 max-h-72 overflow-y-auto pr-1">
-              {commands.length === 0 ? (
-                <p className="text-xs text-gray-500 py-6 text-center">No output commands dispatched yet.</p>
-              ) : (
-                commands.map((cmd) => (
-                  <div
-                    key={cmd.id}
-                    className="p-3 bg-gray-950/80 rounded-xl border border-gray-800 flex items-center justify-between text-xs"
-                  >
-                    <div>
-                      <span className="font-mono text-blue-300 font-semibold">#{cmd.id}</span>
-                      <span className="text-gray-300 font-semibold ml-2">{cmd.command_type}</span>
-                      <span className="text-gray-400 ml-1">GPIO {cmd.gpio_pin} → {cmd.value}</span>
-                    </div>
-                    <div>
-                      {cmd.status === 'EXECUTED' ? (
-                        <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
-                          ACK EXECUTED
-                        </span>
-                      ) : cmd.status === 'SENT' ? (
-                        <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/20 text-amber-400 border border-amber-500/30">
-                          SENT TO ESP32
-                        </span>
-                      ) : (
-                        <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-blue-500/20 text-blue-400 border border-blue-500/30">
-                          PENDING POLL
-                        </span>
-                      )}
-                    </div>
-                  </div>
-                ))
-              )}
+              <div>
+                <label className="block text-[11px] font-mono text-zinc-400 mb-1">Target Output State</label>
+                <select
+                  value={targetValue}
+                  onChange={(e) => setTargetValue(Number(e.target.value))}
+                  className="bg-zinc-900 border border-zinc-700 text-xs text-zinc-100 rounded p-2 font-mono"
+                >
+                  <option value={1}>HIGH / TURN ON (1)</option>
+                  <option value={0}>LOW / TURN OFF (0)</option>
+                </select>
+              </div>
+
+              <div className="pt-5">
+                <Button variant="primary" size="sm" type="submit" loading={commandSending} icon={<Send className="h-3.5 w-3.5" />}>
+                  Dispatch Command
+                </Button>
+              </div>
+            </form>
+          </div>
+
+          <div className="dev-panel overflow-hidden">
+            <div className="p-4 border-b border-zinc-800">
+              <h3 className="text-xs font-bold text-zinc-100">Dispatched Commands Audit Trail</h3>
             </div>
+            <table className="w-full text-left dev-table">
+              <thead>
+                <tr>
+                  <th>Timestamp</th>
+                  <th>GPIO Pin</th>
+                  <th>Value</th>
+                  <th>Status</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-zinc-800/60 text-xs font-mono">
+                {commands.map((cmd) => (
+                  <tr key={cmd.id}>
+                    <td className="text-zinc-400">{new Date(cmd.created_at).toLocaleTimeString()}</td>
+                    <td className="text-zinc-200">GPIO {cmd.gpio_pin}</td>
+                    <td className="text-emerald-400 font-bold">{cmd.value === 1 ? 'HIGH (1)' : 'LOW (0)'}</td>
+                    <td>
+                      <Badge variant={cmd.status === 'EXECUTED' ? 'success' : 'warning'}>{cmd.status}</Badge>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
         </div>
-      </div>
+      )}
+
+      {/* TAB 6: LOGS */}
+      {activeTab === 'logs' && (
+        <div className="dev-panel p-4 bg-[#09090b] font-mono text-xs space-y-2">
+          <div className="flex items-center justify-between border-b border-zinc-800 pb-2 text-zinc-400">
+            <span>Terminal Log Feed — {device.id}</span>
+            <span className="text-emerald-400">● LIVE</span>
+          </div>
+          <div className="space-y-1 py-2 text-zinc-300">
+            <p><span className="text-zinc-500">[{new Date().toLocaleTimeString()}]</span> <span className="text-blue-400">INFO</span> Device authenticated on LAN: {device.ip_address}</p>
+            <p><span className="text-zinc-500">[{new Date().toLocaleTimeString()}]</span> <span className="text-blue-400">INFO</span> MQTT PubSubClient connected on port 1883</p>
+            <p><span className="text-zinc-500">[{new Date().toLocaleTimeString()}]</span> <span className="text-emerald-400">SUCCESS</span> Ingested telemetry payload</p>
+          </div>
+        </div>
+      )}
+
+      {/* TAB 7: FIRMWARE */}
+      {activeTab === 'firmware' && (
+        <div className="dev-panel p-6 space-y-4">
+          <div className="flex items-center justify-between">
+            <div>
+              <h3 className="text-sm font-bold text-zinc-100">ESP32 Dynamic C++ Sketch Generator</h3>
+              <p className="text-xs text-zinc-400">Generate, compile, and download sketch configured for this node</p>
+            </div>
+            <Link href={`/devices/${deviceId}/firmware`}>
+              <Button variant="primary" size="sm" icon={<FileCode2 className="h-3.5 w-3.5" />}>
+                Open Sketch Generator
+              </Button>
+            </Link>
+          </div>
+        </div>
+      )}
     </div>
   );
-
-  function setActuationStateLocally(gpioPin: number, val: number) {
-    setActuatorStates((prev) => ({ ...prev, [gpioPin]: val }));
-  }
 }

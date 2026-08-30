@@ -1,5 +1,6 @@
 import { query } from '../db';
 import { Server as SocketIOServer } from 'socket.io';
+import { getMqttBroker } from './mqttBroker';
 
 export interface SensorReadingsMap {
   [key: string]: number | boolean;
@@ -120,6 +121,14 @@ export async function evaluateAutomationRules(
 
             commandsTriggered++;
 
+            const cmd = insertCmd.rows[0];
+
+            // Instantly push automation command over MQTT
+            const broker = getMqttBroker();
+            if (broker) {
+              broker.publishCommand(deviceId, gpioPin, Number(rule.action_value), cmd.id);
+            }
+
             // Log event
             const eventMsg = `⚡ Automation rule "${rule.name}" triggered: Set ${rule.action_component} (GPIO ${gpioPin}) to ${rule.action_value}`;
             await query(
@@ -131,10 +140,10 @@ export async function evaluateAutomationRules(
             if (io) {
               io.to(deviceId).emit('automation_triggered', {
                 rule,
-                command: insertCmd.rows[0],
+                command: cmd,
                 message: eventMsg,
               });
-              io.to(deviceId).emit('command_created', insertCmd.rows[0]);
+              io.to(deviceId).emit('command_created', cmd);
             }
           }
         }

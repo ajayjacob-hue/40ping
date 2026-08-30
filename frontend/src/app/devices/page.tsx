@@ -1,24 +1,41 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useSearchParams } from 'next/navigation';
+import { useState, useEffect, useMemo, Suspense } from 'react';
 import Link from 'next/link';
-import { Cpu, Plus, Key, ShieldCheck, Copy, Check, Trash2, ArrowRight, X } from 'lucide-react';
+import StatusDot from '@/components/ui/StatusDot';
+import Badge from '@/components/ui/Badge';
+import Button from '@/components/ui/Button';
+import EmptyState from '@/components/ui/EmptyState';
+import { Cpu, Plus, Search, Trash2, Key, Check, Copy, X } from 'lucide-react';
 import axios from 'axios';
 import { getBackendUrl, Device } from '@/lib/api';
-
 import { io, Socket } from 'socket.io-client';
 
-export default function DevicesPage() {
+function DevicesContent() {
+  const searchParams = useSearchParams();
   const [devices, setDevices] = useState<Device[]>([]);
   const [loading, setLoading] = useState(true);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [activeFilter, setActiveFilter] = useState<'ALL' | 'ONLINE' | 'OFFLINE' | 'WARNING'>('ALL');
+
+  // Modal State
   const [showAddModal, setShowAddModal] = useState(false);
   const [deviceNameInput, setDeviceNameInput] = useState('');
   const [createdDevice, setCreatedDevice] = useState<{ device: Device; serverIp: string; serverPort: number } | null>(null);
   const [copiedToken, setCopiedToken] = useState(false);
 
+  const backendUrl = getBackendUrl();
+
+  useEffect(() => {
+    if (searchParams.get('new') === 'true' || searchParams.get('action') === 'add') {
+      setShowAddModal(true);
+    }
+  }, [searchParams]);
+
   const fetchDevices = async () => {
     try {
-      const res = await axios.get(`${getBackendUrl()}/api/devices`);
+      const res = await axios.get(`${backendUrl}/api/devices`);
       setDevices(res.data.devices || []);
     } catch (err) {
       console.error('Failed to load devices:', err);
@@ -30,8 +47,7 @@ export default function DevicesPage() {
   useEffect(() => {
     fetchDevices();
 
-    // Setup Real-Time Socket.IO connection for live device pings & telemetry
-    const socket: Socket = io(getBackendUrl());
+    const socket: Socket = io(backendUrl);
 
     socket.on('device_heartbeat', (data: { deviceId: string; status: string; ipAddress?: string }) => {
       setDevices((prev) =>
@@ -56,14 +72,14 @@ export default function DevicesPage() {
     return () => {
       socket.disconnect();
     };
-  }, []);
+  }, [backendUrl]);
 
   const handleCreateDevice = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!deviceNameInput.trim()) return;
 
     try {
-      const res = await axios.post(`${getBackendUrl()}/api/devices`, {
+      const res = await axios.post(`${backendUrl}/api/devices`, {
         name: deviceNameInput.trim(),
       });
 
@@ -78,7 +94,7 @@ export default function DevicesPage() {
   const handleDeleteDevice = async (id: string, name: string) => {
     if (!confirm(`Are you sure you want to delete device "${name}" (${id})?`)) return;
     try {
-      await axios.delete(`${getBackendUrl()}/api/devices/${id}`);
+      await axios.delete(`${backendUrl}/api/devices/${id}`);
       fetchDevices();
     } catch (err) {
       alert('Failed to delete device.');
@@ -91,254 +107,253 @@ export default function DevicesPage() {
     setTimeout(() => setCopiedToken(false), 2000);
   };
 
+  // Filtered devices list
+  const filteredDevices = useMemo(() => {
+    return devices.filter((device) => {
+      const matchesSearch =
+        device.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        device.id.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        (device.ip_address && device.ip_address.includes(searchQuery));
+
+      if (!matchesSearch) return false;
+
+      if (activeFilter === 'ONLINE') return device.status === 'ONLINE';
+      if (activeFilter === 'OFFLINE') return device.status === 'OFFLINE';
+      if (activeFilter === 'WARNING') return device.status === 'OFFLINE';
+      return true;
+    });
+  }, [devices, searchQuery, activeFilter]);
+
+  const counts = useMemo(() => {
+    return {
+      all: devices.length,
+      online: devices.filter((d) => d.status === 'ONLINE').length,
+      offline: devices.filter((d) => d.status === 'OFFLINE').length,
+    };
+  }, [devices]);
+
   return (
-    <div className="space-y-8">
-      {/* Page Header */}
-      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+    <div className="space-y-6">
+      {/* Header */}
+      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 border-b border-zinc-800/80 pb-4">
         <div>
-          <h1 className="text-2xl font-bold text-white tracking-tight">Devices Management</h1>
-          <p className="text-sm text-gray-400 mt-1">
-            Register physical ESP32 nodes and configure custom hardware pin mappings.
+          <h1 className="text-xl font-bold text-zinc-100 tracking-tight">Hardware Node Registry</h1>
+          <p className="text-xs text-zinc-400 mt-0.5">
+            Manage your connected ESP32 hardware infrastructure and pin configurations.
           </p>
         </div>
 
-        <button
+        <Button
+          variant="primary"
+          size="sm"
+          icon={<Plus className="h-3.5 w-3.5" />}
           onClick={() => {
             setCreatedDevice(null);
             setShowAddModal(true);
           }}
-          className="flex items-center space-x-2 px-4 py-2.5 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-sm font-medium transition-all shadow-lg glow-blue"
         >
-          <Plus className="h-4 w-4" />
-          <span>+ Add Device</span>
-        </button>
+          Register Device
+        </Button>
       </div>
 
-      {/* Device Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-        {loading ? (
-          <div className="col-span-full p-8 text-center text-sm text-gray-400">Loading devices...</div>
-        ) : devices.length === 0 ? (
-          <div className="col-span-full glass-panel p-12 rounded-2xl border border-gray-800 text-center">
-            <Cpu className="h-12 w-12 text-gray-600 mx-auto mb-3" />
-            <h3 className="text-lg font-semibold text-gray-200">No ESP32 Devices Configured</h3>
-            <p className="text-xs text-gray-400 max-w-md mx-auto mt-1 mb-6">
-              Click "+ Add Device" to register your ESP32. The system will auto-generate a unique Device ID and authentication token.
-            </p>
+      {/* Search and Filter Controls */}
+      <div className="dev-panel p-3 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
+        {/* Filter Tabs */}
+        <div className="flex items-center space-x-1 font-mono text-xs">
+          {[
+            { id: 'ALL', label: 'All', count: counts.all },
+            { id: 'ONLINE', label: 'Online', count: counts.online },
+            { id: 'OFFLINE', label: 'Offline', count: counts.offline },
+          ].map((tab) => (
             <button
-              onClick={() => {
-                setCreatedDevice(null);
-                setShowAddModal(true);
-              }}
-              className="inline-flex items-center space-x-2 px-4 py-2.5 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-sm font-medium"
+              key={tab.id}
+              onClick={() => setActiveFilter(tab.id as any)}
+              className={`px-3 py-1 rounded-md transition-colors flex items-center space-x-1.5 ${
+                activeFilter === tab.id
+                  ? 'bg-zinc-800 text-zinc-100 font-semibold shadow-xs'
+                  : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/50'
+              }`}
             >
-              <Plus className="h-4 w-4" />
-              <span>Register First Device</span>
+              <span>{tab.label}</span>
+              <span className="text-[10px] text-zinc-500 font-normal">({tab.count})</span>
             </button>
-          </div>
+          ))}
+        </div>
+
+        {/* Search Bar */}
+        <div className="relative flex-1 max-w-xs">
+          <Search className="h-3.5 w-3.5 absolute left-2.5 top-2.5 text-zinc-500" />
+          <input
+            type="text"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder="Search by ID, name, or IP..."
+            className="w-full bg-zinc-900 border border-zinc-800 text-xs text-zinc-200 rounded-md pl-8 pr-3 py-1.5 focus:outline-none focus:border-zinc-700 font-sans"
+          />
+        </div>
+      </div>
+
+      {/* Devices Data Table */}
+      <div className="dev-panel overflow-hidden">
+        {loading ? (
+          <div className="p-8 text-center text-xs text-zinc-400">Loading hardware device registry...</div>
+        ) : filteredDevices.length === 0 ? (
+          <EmptyState
+            icon={Cpu}
+            title={searchQuery ? 'No matching devices found' : 'No Devices Registered Yet'}
+            description={
+              searchQuery
+                ? 'Try adjusting your search or status filter query.'
+                : 'Register your physical ESP32 device to start ingesting telemetry and controlling GPIO outputs.'
+            }
+            actionLabel={searchQuery ? undefined : 'Register Device'}
+            onAction={
+              searchQuery
+                ? undefined
+                : () => {
+                    setCreatedDevice(null);
+                    setShowAddModal(true);
+                  }
+            }
+          />
         ) : (
-          devices.map((device) => (
-            <div
-              key={device.id}
-              className="glass-panel p-6 rounded-2xl border border-gray-800 hover:border-gray-700 transition-all flex flex-col justify-between"
-            >
-              <div>
-                <div className="flex items-start justify-between">
-                  <div className="flex items-center space-x-3">
-                    <div className="p-3 bg-blue-600/10 border border-blue-500/20 text-blue-400 rounded-xl">
-                      <Cpu className="h-6 w-6" />
-                    </div>
-                    <div>
-                      <h3 className="font-bold text-white text-base">{device.name}</h3>
-                      <p className="text-xs font-mono text-blue-300 mt-0.5">{device.id}</p>
-                    </div>
-                  </div>
-
-                  <button
-                    onClick={() => handleDeleteDevice(device.id, device.name)}
-                    className="p-1.5 text-gray-500 hover:text-red-400 hover:bg-gray-800 rounded-lg transition-colors"
-                    title="Delete device"
-                  >
-                    <Trash2 className="h-4 w-4" />
-                  </button>
-                </div>
-
-                <div className="mt-4 pt-4 border-t border-gray-800/80 space-y-2 text-xs">
-                  <div className="flex items-center justify-between">
-                    <span className="text-gray-400">Connection Status:</span>
-                    {device.status === 'ONLINE' ? (
-                      <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
-                        <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse mr-1"></span>
-                        ONLINE
-                      </span>
-                    ) : (
-                      <span className="px-2 py-0.5 rounded-full text-xs font-semibold bg-gray-800 text-gray-400">
-                        OFFLINE
-                      </span>
-                    )}
-                  </div>
-
-                  <div className="flex items-center justify-between">
-                    <span className="text-gray-400">Device IP:</span>
-                    <span className="font-mono text-gray-300">{device.ip_address || 'Not Connected'}</span>
-                  </div>
-
-                  <div className="flex items-center justify-between">
-                    <span className="text-gray-400">Token:</span>
-                    <div className="flex items-center space-x-1 font-mono text-[11px] text-gray-400">
-                      <span>{device.token.substring(0, 8)}...</span>
-                      <button onClick={() => copyToken(device.token)} className="text-gray-500 hover:text-gray-300">
-                        <Copy className="h-3 w-3" />
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              {/* Action Buttons */}
-              <div className="mt-6 pt-4 border-t border-gray-800/80 grid grid-cols-2 gap-2">
-                <Link
-                  href={`/devices/${device.id}`}
-                  className="px-3 py-2 bg-blue-600/20 text-blue-400 border border-blue-500/30 rounded-xl text-xs font-medium text-center hover:bg-blue-600/30 transition-colors"
-                >
-                  Telemetry Dashboard
-                </Link>
-                <Link
-                  href={`/devices/${device.id}/hardware`}
-                  className="px-3 py-2 bg-gray-800 text-gray-300 border border-gray-700 rounded-xl text-xs font-medium text-center hover:bg-gray-700 transition-colors"
-                >
-                  Hardware Pins
-                </Link>
-              </div>
-            </div>
-          ))
+          <table className="w-full text-left dev-table">
+            <thead>
+              <tr>
+                <th>Device Name</th>
+                <th>Device ID</th>
+                <th>Status</th>
+                <th>IP Address</th>
+                <th>Firmware</th>
+                <th className="text-right">Actions</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-zinc-800/60 text-xs">
+              {filteredDevices.map((device) => (
+                <tr key={device.id} className="hover:bg-zinc-800/40 transition-colors">
+                  <td className="font-semibold text-zinc-100">
+                    <Link href={`/devices/${device.id}`} className="hover:text-blue-400">
+                      {device.name}
+                    </Link>
+                  </td>
+                  <td className="font-mono text-zinc-400 text-[11px]">{device.id}</td>
+                  <td>
+                    <StatusDot status={device.status} />
+                  </td>
+                  <td className="font-mono text-zinc-400 text-[11px]">{device.ip_address || '---'}</td>
+                  <td>
+                    <Badge variant="mono">v1.0.0</Badge>
+                  </td>
+                  <td className="text-right space-x-1.5">
+                    <Link href={`/devices/${device.id}`}>
+                      <Button variant="outline" size="sm">
+                        Console
+                      </Button>
+                    </Link>
+                    <Link href={`/devices/${device.id}/hardware`}>
+                      <Button variant="secondary" size="sm">
+                        GPIO Pins
+                      </Button>
+                    </Link>
+                    <Link href={`/devices/${device.id}/firmware`}>
+                      <Button variant="outline" size="sm">
+                        Firmware
+                      </Button>
+                    </Link>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => handleDeleteDevice(device.id, device.name)}
+                      title="Delete Device"
+                      className="text-zinc-500 hover:text-rose-400"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </Button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         )}
       </div>
 
-      {/* Add Device Modal */}
+      {/* Register Device Modal */}
       {showAddModal && (
-        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="glass-panel w-full max-w-md rounded-2xl border border-gray-700 p-6 shadow-2xl space-y-6">
+        <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="dev-panel w-full max-w-md p-6 space-y-4 shadow-xl">
+            <div className="flex items-center justify-between border-b border-zinc-800 pb-3">
+              <div className="flex items-center space-x-2">
+                <Cpu className="h-4 w-4 text-blue-400" />
+                <h3 className="text-sm font-bold text-zinc-100">Register ESP32 Hardware Node</h3>
+              </div>
+              <button
+                onClick={() => setShowAddModal(false)}
+                className="text-zinc-400 hover:text-zinc-100 p-1"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
             {!createdDevice ? (
-              <>
-                <div className="flex items-center justify-between border-b border-gray-800 pb-4">
-                  <div className="flex items-center space-x-3">
-                    <div className="p-2.5 bg-blue-600/20 text-blue-400 rounded-xl border border-blue-500/30">
-                      <Cpu className="h-5 w-5" />
-                    </div>
-                    <div>
-                      <h3 className="font-bold text-white text-lg">Add New Device</h3>
-                      <p className="text-xs text-gray-400">Register a new ESP32 microcontroller node</p>
-                    </div>
-                  </div>
-                  <button onClick={() => setShowAddModal(false)} className="text-gray-400 hover:text-white">
-                    <X className="h-5 w-5" />
-                  </button>
+              <form onSubmit={handleCreateDevice} className="space-y-4">
+                <div>
+                  <label className="block text-xs font-medium text-zinc-300 mb-1">
+                    Device Name / Location Label
+                  </label>
+                  <input
+                    type="text"
+                    value={deviceNameInput}
+                    onChange={(e) => setDeviceNameInput(e.target.value)}
+                    placeholder="e.g. Smart Room Sensor or Greenhouse Node"
+                    className="w-full bg-zinc-900 border border-zinc-700 text-xs text-zinc-100 rounded-md p-2.5 focus:border-blue-500 focus:outline-none"
+                    required
+                  />
                 </div>
 
-                <form onSubmit={handleCreateDevice} className="space-y-4">
-                  <div>
-                    <label className="block text-xs font-medium text-gray-300 mb-1.5">
-                      Device Name (e.g. Smart Room, Living Lab)
-                    </label>
-                    <input
-                      type="text"
-                      required
-                      value={deviceNameInput}
-                      onChange={(e) => setDeviceNameInput(e.target.value)}
-                      placeholder="Smart Room"
-                      className="w-full bg-gray-900 border border-gray-700 rounded-xl px-4 py-2.5 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-blue-500"
-                    />
-                  </div>
-
-                  <div className="p-3 bg-blue-950/30 border border-blue-800/40 rounded-xl text-xs text-blue-300">
-                    <p className="font-semibold flex items-center">
-                      <ShieldCheck className="h-4 w-4 mr-1 text-blue-400" /> Auto-Generated Setup
-                    </p>
-                    <p className="text-gray-400 text-[11px] mt-0.5">
-                      The backend will assign a Device ID and generate a secure secret token. You can configure your hardware pins right after registration.
-                    </p>
-                  </div>
-
-                  <div className="flex justify-end space-x-3 pt-2">
-                    <button
-                      type="button"
-                      onClick={() => setShowAddModal(false)}
-                      className="px-4 py-2 bg-gray-800 text-gray-300 rounded-xl text-xs font-medium hover:bg-gray-700"
-                    >
-                      Cancel
-                    </button>
-                    <button
-                      type="submit"
-                      className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-medium shadow-md glow-blue"
-                    >
-                      Generate Device Credentials
-                    </button>
-                  </div>
-                </form>
-              </>
+                <div className="flex items-center justify-end space-x-2 pt-3 border-t border-zinc-800">
+                  <Button variant="outline" size="sm" type="button" onClick={() => setShowAddModal(false)}>
+                    Cancel
+                  </Button>
+                  <Button variant="primary" size="sm" type="submit">
+                    Generate Credentials
+                  </Button>
+                </div>
+              </form>
             ) : (
-              /* Created Credentials Summary Screen */
-              <div className="space-y-5">
-                <div className="flex items-center space-x-3 border-b border-gray-800 pb-4">
-                  <div className="p-2.5 bg-emerald-500/20 text-emerald-400 rounded-xl border border-emerald-500/30">
-                    <ShieldCheck className="h-6 w-6" />
-                  </div>
-                  <div>
-                    <h3 className="font-bold text-white text-lg">Device Credentials Generated</h3>
-                    <p className="text-xs text-emerald-400 font-medium">Use these values in your ESP32 code</p>
+              <div className="space-y-4">
+                <div className="p-3 bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 rounded-md text-xs">
+                  ✓ Hardware device registered successfully!
+                </div>
+
+                <div className="space-y-2">
+                  <span className="text-[11px] font-mono text-zinc-400 uppercase">Assigned Device ID</span>
+                  <div className="p-2 bg-zinc-900 border border-zinc-800 rounded font-mono text-xs text-zinc-200">
+                    {createdDevice.device.id}
                   </div>
                 </div>
 
-                <div className="space-y-3 text-xs">
-                  <div className="p-3 bg-gray-900 rounded-xl border border-gray-800 space-y-1">
-                    <span className="text-gray-400 block font-medium">Device Name:</span>
-                    <span className="text-white font-bold text-sm">{createdDevice.device.name}</span>
-                  </div>
-
-                  <div className="p-3 bg-gray-900 rounded-xl border border-gray-800 space-y-1">
-                    <span className="text-gray-400 block font-medium">Device ID:</span>
-                    <span className="text-blue-300 font-mono text-sm font-bold">{createdDevice.device.id}</span>
-                  </div>
-
-                  <div className="p-3 bg-gray-900 rounded-xl border border-gray-800 space-y-1">
-                    <div className="flex items-center justify-between">
-                      <span className="text-gray-400 font-medium">Device Token:</span>
-                      <button
-                        onClick={() => copyToken(createdDevice.device.token)}
-                        className="text-blue-400 hover:text-blue-300 text-[11px] flex items-center space-x-1"
-                      >
-                        {copiedToken ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
-                        <span>{copiedToken ? 'Copied' : 'Copy'}</span>
-                      </button>
-                    </div>
-                    <span className="text-amber-300 font-mono text-xs break-all block">{createdDevice.device.token}</span>
-                  </div>
-
-                  <div className="p-3 bg-gray-900 rounded-xl border border-gray-800 space-y-1">
-                    <span className="text-gray-400 block font-medium">ESP32 Server Address:</span>
-                    <span className="text-emerald-400 font-mono text-xs font-bold">
-                      http://{createdDevice.serverIp}:{createdDevice.serverPort}
-                    </span>
+                <div className="space-y-2">
+                  <span className="text-[11px] font-mono text-zinc-400 uppercase">Secure Auth Token</span>
+                  <div className="p-2 bg-zinc-900 border border-zinc-800 rounded font-mono text-xs text-blue-300 flex items-center justify-between">
+                    <span className="truncate pr-2">{createdDevice.device.token}</span>
+                    <button
+                      onClick={() => copyToken(createdDevice.device.token)}
+                      className="p-1 hover:text-zinc-100 text-zinc-400"
+                    >
+                      {copiedToken ? <Check className="h-3.5 w-3.5 text-emerald-400" /> : <Copy className="h-3.5 w-3.5" />}
+                    </button>
                   </div>
                 </div>
 
-                <div className="pt-2 flex flex-col gap-2">
-                  <Link
-                    href={`/devices/${createdDevice.device.id}/firmware`}
-                    onClick={() => setShowAddModal(false)}
-                    className="w-full py-2.5 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-semibold text-center shadow-lg glow-blue flex items-center justify-center space-x-2"
-                  >
-                    <span>Download Pre-filled ESP32 .ino Firmware</span>
-                    <ArrowRight className="h-4 w-4" />
+                <div className="pt-3 border-t border-zinc-800 flex items-center justify-between">
+                  <Link href={`/devices/${createdDevice.device.id}/firmware`}>
+                    <Button variant="primary" size="sm">
+                      View C++ Firmware
+                    </Button>
                   </Link>
-
-                  <button
-                    onClick={() => setShowAddModal(false)}
-                    className="w-full py-2 bg-gray-800 text-gray-300 rounded-xl text-xs font-medium hover:bg-gray-700"
-                  >
+                  <Button variant="outline" size="sm" onClick={() => setShowAddModal(false)}>
                     Close
-                  </button>
+                  </Button>
                 </div>
               </div>
             )}
@@ -346,5 +361,13 @@ export default function DevicesPage() {
         </div>
       )}
     </div>
+  );
+}
+
+export default function DevicesPage() {
+  return (
+    <Suspense fallback={<div className="dev-panel p-8 text-center text-xs text-zinc-400">Loading devices registry...</div>}>
+      <DevicesContent />
+    </Suspense>
   );
 }

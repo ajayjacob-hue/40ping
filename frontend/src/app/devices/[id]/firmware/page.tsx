@@ -6,6 +6,7 @@ import Link from 'next/link';
 import { FileCode2, Download, Copy, Check, ArrowLeft, Wifi, Server, Key, ShieldCheck, Cpu } from 'lucide-react';
 import axios from 'axios';
 import { getBackendUrl, Device, Component } from '@/lib/api';
+import Button from '@/components/ui/Button';
 
 export default function FirmwareGeneratorPage() {
   const params = useParams();
@@ -59,7 +60,7 @@ export default function FirmwareGeneratorPage() {
     const buttonComp = components.find((c) => c.type === 'PUSH_BUTTON');
 
     // Build Header Includes
-    let includes = `#include <WiFi.h>\n#include <HTTPClient.h>\n#include <ArduinoJson.h>`;
+    let includes = `#include <WiFi.h>\n#include <HTTPClient.h>\n#include <PubSubClient.h>\n#include <ArduinoJson.h>`;
     if (hasDht) includes += `\n#include <DHT.h>`;
 
     // Build Pin Definitions
@@ -113,7 +114,7 @@ export default function FirmwareGeneratorPage() {
     }
 
     return `/*
- * IoT-to-Web Auto-Generated ESP32 Arduino Sketch
+ * IoT-to-Web Auto-Generated ESP32 Arduino Sketch (MQTT + HTTP Fallback)
  * Device Name: ${device?.name || 'Smart Room'}
  * Device ID:   ${deviceId}
  * Configured Components: ${components.map((c) => c.type).join(', ') || 'Default'}
@@ -126,9 +127,10 @@ ${includes}
 const char* WIFI_SSID     = "${wifiSsid}";
 const char* WIFI_PASSWORD = "${wifiPassword}";
 
-// Local Laptop Server Configuration (DO NOT USE "localhost")
+// Server Configuration (Render Domain or Local Laptop IP)
 const char* SERVER_IP     = "${serverIp}";
 const int   SERVER_PORT   = ${serverPort};
+const int   MQTT_PORT     = 1883;
 
 // Device Credentials
 const char* DEVICE_ID     = "${deviceId}";
@@ -136,26 +138,50 @@ const char* DEVICE_TOKEN  = "${token}";
 
 ${pinDefs}
 ${sensorInitGlobal}
+WiFiClient espClient;
+PubSubClient mqttClient(espClient);
+
 String serverBaseUrl;
+String mqttTelemetryTopic;
+String mqttCommandTopic;
+String mqttStatusTopic;
+
 unsigned long lastTelemetryTime = 0;
 unsigned long lastCommandPollTime = 0;
 unsigned long lastHeartbeatTime = 0;
 
+void connectWiFi();
+void connectMQTT();
+void mqttCallback(char* topic, byte* payload, unsigned int length);
+
 void setup() {
   Serial.begin(115200);
 ${setupCode}
-  serverBaseUrl = "http://" + String(SERVER_IP) + ":" + String(SERVER_PORT) + "/api/device/" + String(DEVICE_ID);
+  serverBaseUrl       = "http://" + String(SERVER_IP) + ":" + String(SERVER_PORT) + "/api/device/" + String(DEVICE_ID);
+  mqttTelemetryTopic  = "devices/" + String(DEVICE_ID) + "/telemetry";
+  mqttCommandTopic    = "devices/" + String(DEVICE_ID) + "/commands";
+  mqttStatusTopic     = "devices/" + String(DEVICE_ID) + "/status";
+
+  mqttClient.setServer(SERVER_IP, MQTT_PORT);
+  mqttClient.setCallback(mqttCallback);
 
   connectWiFi();
+  connectMQTT();
 }
 
 void loop() {
   if (WiFi.status() != WL_CONNECTED) connectWiFi();
 
+  if (!mqttClient.connected()) {
+    connectMQTT();
+  } else {
+    mqttClient.loop(); // Process incoming MQTT commands instantly (< 5ms)
+  }
+
   unsigned long currentMillis = millis();
 
-  // Poll Pending Commands Every 100ms for fast responsiveness
-  if (currentMillis - lastCommandPollTime >= 100) {
+  // Fallback HTTP Command Poll Every 100ms if MQTT disconnected
+  if (!mqttClient.connected() && (currentMillis - lastCommandPollTime >= 100)) {
     lastCommandPollTime = currentMillis;
     pollCommands();
   }
@@ -166,13 +192,35 @@ void loop() {
     sendTelemetry();
   }
 
-  // Send Heartbeat Every 10 Seconds
-  if (currentMillis - lastHeartbeatTime >= 10000) {
+  // Send Heartbeat Every 10 Seconds if MQTT disconnected
+  if (!mqttClient.connected() && (currentMillis - lastHeartbeatTime >= 10000)) {
     lastHeartbeatTime = currentMillis;
     sendHeartbeat();
   }
 
   delay(10);
+}
+
+void connectMQTT() {
+  if (WiFi.status() != WL_CONNECTED) return;
+  if (mqttClient.connect(DEVICE_ID, mqttStatusTopic.c_str(), 1, true, "OFFLINE")) {
+    mqttClient.publish(mqttStatusTopic.c_str(), "ONLINE", true);
+    mqttClient.subscribe(mqttCommandTopic.c_str());
+  }
+}
+
+void mqttCallback(char* topic, byte* payload, unsigned int length) {
+  String msg;
+  for (int i = 0; i < length; i++) msg += (char)payload[i];
+  StaticJsonDocument<256> doc;
+  if (!deserializeJson(doc, msg)) {
+    int gpio = doc["gpio"] | -1;
+    int val  = doc["value"] | 0;
+    if (gpio >= 0) {
+      pinMode(gpio, OUTPUT);
+      digitalWrite(gpio, val == 1 ? HIGH : LOW);
+    }
+  }
 }
 
 void connectWiFi() {
@@ -272,103 +320,96 @@ void pollCommands() {
   };
 
   if (loading) {
-    return <div className="p-8 text-center text-sm text-gray-400">Generating dynamic firmware sketch...</div>;
+    return <div className="dev-panel p-8 text-center text-xs text-zinc-400">Generating dynamic firmware sketch...</div>;
   }
 
   return (
-    <div className="space-y-8 max-w-4xl mx-auto">
+    <div className="space-y-6 max-w-4xl mx-auto">
       {/* Page Header */}
-      <div className="flex items-center justify-between">
-        <div className="flex items-center space-x-3">
-          <Link href={`/devices/${deviceId}`} className="p-2 bg-gray-800 hover:bg-gray-700 text-gray-300 rounded-xl">
-            <ArrowLeft className="h-4 w-4" />
-          </Link>
-          <div>
-            <h1 className="text-2xl font-bold text-white tracking-tight">ESP32 Firmware Generator</h1>
-            <p className="text-sm text-gray-400 mt-0.5">Generate custom Arduino C++ sketch for <span className="text-blue-300 font-mono">{deviceId}</span></p>
+      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 border-b border-zinc-800/80 pb-4">
+        <div>
+          <div className="flex items-center space-x-2">
+            <Link href={`/devices/${deviceId}`} className="text-zinc-400 hover:text-zinc-100 transition-colors">
+              <ArrowLeft className="h-4 w-4" />
+            </Link>
+            <h1 className="text-xl font-bold text-zinc-100 tracking-tight">C++ Firmware Generator</h1>
           </div>
+          <p className="text-xs text-zinc-400 mt-1">
+            Generate custom Arduino C++ sketch configured for node <strong className="text-zinc-200 font-mono">{deviceId}</strong>.
+          </p>
         </div>
 
-        <button
-          onClick={handleDownloadFile}
-          className="flex items-center space-x-2 px-5 py-2.5 bg-purple-600 hover:bg-purple-500 text-white rounded-xl text-sm font-semibold shadow-lg transition-all"
-        >
-          <Download className="h-4 w-4" />
-          <span>Download .ino File</span>
-        </button>
+        <Button variant="primary" size="sm" icon={<Download className="h-3.5 w-3.5" />} onClick={handleDownloadFile}>
+          Download .ino Sketch
+        </Button>
       </div>
 
       {/* Configured Components Banner */}
-      <div className="p-4 bg-gray-900/80 border border-gray-800 rounded-2xl flex items-center justify-between">
+      <div className="dev-panel p-4 flex items-center justify-between">
         <div className="flex items-center space-x-3">
-          <div className="p-2.5 bg-blue-600/20 text-blue-400 rounded-xl border border-blue-500/30">
-            <Cpu className="h-5 w-5" />
+          <div className="p-2 bg-zinc-900 border border-zinc-800 rounded text-blue-400">
+            <Cpu className="h-4 w-4" />
           </div>
           <div>
-            <span className="text-xs font-semibold text-gray-300 block">Configured Device Hardware</span>
-            <span className="text-xs text-blue-400 font-mono">
-              {components.map((c) => `${c.name} (${c.type} on GPIO ${c.gpio_pin}${c.gpio_secondary !== -1 ? '/' + c.gpio_secondary : ''})`).join(' • ') || 'No components configured'}
+            <span className="text-xs font-bold text-zinc-200 block">Hardware Driver Mappings</span>
+            <span className="text-xs font-mono text-zinc-400">
+              {components.map((c) => `${c.name} (${c.type} on GPIO ${c.gpio_pin})`).join(' • ') || 'No components configured'}
             </span>
           </div>
         </div>
 
-        <Link
-          href={`/devices/${deviceId}/hardware`}
-          className="text-xs text-gray-400 hover:text-white underline font-medium"
-        >
-          Change Pins
+        <Link href={`/devices/${deviceId}/hardware`}>
+          <Button variant="outline" size="sm">
+            Edit Pins
+          </Button>
         </Link>
       </div>
 
       {/* Network Configuration Form */}
-      <div className="glass-panel p-6 rounded-2xl border border-gray-800 space-y-4">
-        <h3 className="font-bold text-white text-base flex items-center">
-          <Wifi className="h-4 w-4 mr-2 text-blue-400" /> Enter Local Wi-Fi Credentials
+      <div className="dev-panel p-5 space-y-4">
+        <h3 className="text-xs font-bold text-zinc-100 flex items-center">
+          <Wifi className="h-4 w-4 mr-2 text-blue-400" /> Wi-Fi Credentials Provisioning
         </h3>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div>
-            <label className="block text-xs font-medium text-gray-400 mb-1">Wi-Fi SSID (Network Name)</label>
+            <label className="block text-xs font-medium text-zinc-300 mb-1">Wi-Fi SSID</label>
             <input
               type="text"
               value={wifiSsid}
               onChange={(e) => setWifiSsid(e.target.value)}
               placeholder="Home_WiFi"
-              className="w-full bg-gray-900 border border-gray-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-blue-500"
+              className="w-full bg-zinc-900 border border-zinc-700 rounded text-xs text-zinc-100 p-2 font-mono"
             />
           </div>
 
           <div>
-            <label className="block text-xs font-medium text-gray-400 mb-1">Wi-Fi Password</label>
+            <label className="block text-xs font-medium text-zinc-300 mb-1">Wi-Fi Password</label>
             <input
               type="password"
               value={wifiPassword}
               onChange={(e) => setWifiPassword(e.target.value)}
               placeholder="••••••••"
-              className="w-full bg-gray-900 border border-gray-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-blue-500"
+              className="w-full bg-zinc-900 border border-zinc-700 rounded text-xs text-zinc-100 p-2 font-mono"
             />
           </div>
         </div>
       </div>
 
       {/* Generated Code Preview Box */}
-      <div className="glass-panel rounded-2xl border border-gray-800 overflow-hidden">
-        <div className="p-4 bg-gray-900/80 border-b border-gray-800 flex items-center justify-between">
+      <div className="dev-panel overflow-hidden border border-zinc-800 bg-[#09090b]">
+        <div className="p-3 bg-zinc-950 border-b border-zinc-800 flex items-center justify-between">
           <div className="flex items-center space-x-2">
-            <FileCode2 className="h-4 w-4 text-purple-400" />
-            <span className="font-mono text-xs text-gray-300">{deviceId}_firmware.ino</span>
+            <FileCode2 className="h-4 w-4 text-blue-400" />
+            <span className="font-mono text-xs text-zinc-300">{deviceId}_firmware.ino</span>
           </div>
 
-          <button
-            onClick={handleCopyCode}
-            className="flex items-center space-x-1 px-3 py-1 bg-gray-800 hover:bg-gray-700 text-gray-300 rounded-lg text-xs font-medium border border-gray-700"
-          >
-            {copied ? <Check className="h-3.5 w-3.5 text-emerald-400" /> : <Copy className="h-3.5 w-3.5" />}
-            <span>{copied ? 'Copied!' : 'Copy Code'}</span>
-          </button>
+          <Button variant="ghost" size="sm" icon={copied ? <Check className="h-3.5 w-3.5 text-emerald-400" /> : <Copy className="h-3.5 w-3.5" />} onClick={handleCopyCode}>
+            {copied ? 'Copied' : 'Copy Code'}
+          </Button>
         </div>
 
-        <pre className="p-5 text-xs font-mono text-gray-300 bg-gray-950 overflow-x-auto max-h-96 leading-relaxed">
+        <pre className="p-4 text-xs font-mono text-zinc-300 bg-[#09090b] overflow-x-auto max-h-96 leading-relaxed">
           <code>{generateFirmwareCode()}</code>
         </pre>
       </div>

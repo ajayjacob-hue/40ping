@@ -3,28 +3,76 @@
 @tailwind utilities;
 
 @layer base {
+  :root {
+    --bg-main: #09090b;
+    --bg-surface: #121215;
+    --bg-panel: #18181b;
+    --border-subtle: #27272a;
+    --border-strong: #3f3f46;
+  }
+
   body {
-    @apply bg-[#0b0f19] text-gray-100 antialiased selection:bg-blue-600 selection:text-white font-sans min-h-screen;
+    @apply bg-[#09090b] text-zinc-100 antialiased selection:bg-blue-600 selection:text-white font-sans min-h-screen tracking-tight text-sm;
+    font-feature-settings: "cv02", "cv03", "cv04", "cv11";
   }
 }
 
-.glass-panel {
-  background: rgba(17, 24, 39, 0.75);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  border: 1px solid rgba(255, 255, 255, 0.08);
+/* Developer Console Surface Classes */
+.dev-panel {
+  background-color: #121215;
+  border: 1px solid #27272a;
+  border-radius: 0.75rem;
 }
 
-.glass-card {
-  background: rgba(31, 41, 55, 0.5);
-  backdrop-filter: blur(8px);
-  border: 1px solid rgba(255, 255, 255, 0.05);
+.dev-card {
+  background-color: #18181b;
+  border: 1px solid #27272a;
+  border-radius: 0.5rem;
 }
 
-.glow-blue {
-  box-shadow: 0 0 25px -5px rgba(59, 130, 246, 0.3);
+.dev-input {
+  background-color: #18181b;
+  border: 1px solid #27272a;
+  color: #f4f4f5;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
 }
 
-.glow-green {
-  box-shadow: 0 0 25px -5px rgba(34, 197, 94, 0.3);
+.dev-input:focus {
+  border-color: #3b82f6;
+  outline: none;
+  box-shadow: 0 0 0 1px #3b82f6;
+}
+
+.dev-table th {
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: #a1a1aa;
+  padding: 0.625rem 1rem;
+  border-bottom: 1px solid #27272a;
+}
+
+.dev-table td {
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid #18181b;
+}
+
+/* Custom Developer Scrollbar */
+::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+
+::-webkit-scrollbar-track {
+  background: #09090b;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #27272a;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #3f3f46;
 }

@@ -3,11 +3,13 @@
 import { useState, useEffect } from 'react';
 import { useParams } from 'next/navigation';
 import Link from 'next/link';
-import { Zap, Plus, Sparkles, Trash2, ArrowLeft, CheckCircle2 } from 'lucide-react';
+import Button from '@/components/ui/Button';
+import Badge from '@/components/ui/Badge';
+import { Zap, Plus, Trash2, ArrowLeft, Check, Sparkles } from 'lucide-react';
 import axios from 'axios';
 import { getBackendUrl, AutomationRule, Component } from '@/lib/api';
 
-export default function AutomationsPage() {
+export default function DeviceAutomationsPage() {
   const params = useParams();
   const deviceId = params.id as string;
 
@@ -21,12 +23,8 @@ export default function AutomationsPage() {
   const [condition, setCondition] = useState<'DETECTED' | 'EQUALS' | 'GREATER_THAN' | 'LESS_THAN'>('DETECTED');
   const [triggerVal, setTriggerVal] = useState<number>(1);
   const [actionComp, setActionComp] = useState('LED');
-  const [actionType, setActionType] = useState('GPIO_WRITE');
   const [actionVal, setActionVal] = useState<number>(1);
-
-  // AI Copilot prompt
-  const [aiPrompt, setAiPrompt] = useState('');
-  const [aiParsing, setAiParsing] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
 
   const fetchRulesAndComponents = async () => {
     try {
@@ -47,256 +45,170 @@ export default function AutomationsPage() {
   const handleCreateRule = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
+      setSubmitting(true);
       await axios.post(`${getBackendUrl()}/api/devices/${deviceId}/automations`, {
         name: ruleName || `IF ${sensorComp} ${condition} THEN ${actionComp} = ${actionVal}`,
         sensor_component: sensorComp,
         condition,
         trigger_value: triggerVal,
         action_component: actionComp,
-        action_type: actionType,
+        action_type: 'GPIO_WRITE',
         action_value: actionVal,
       });
 
       setRuleName('');
       fetchRulesAndComponents();
     } catch (err) {
-      alert('Failed to save automation rule.');
+      console.error('Failed to create rule:', err);
+    } finally {
+      setSubmitting(false);
     }
   };
 
   const handleDeleteRule = async (ruleId: number) => {
     try {
-      await axios.delete(`${getBackendUrl()}/api/devices/${deviceId}/automations/${ruleId}`);
+      await axios.delete(`${getBackendUrl()}/api/automations/${ruleId}`);
       fetchRulesAndComponents();
     } catch (err) {
-      alert('Failed to delete rule.');
+      console.error('Failed to delete rule:', err);
     }
   };
-
-  const handleAiParse = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!aiPrompt.trim()) return;
-
-    setAiParsing(true);
-    try {
-      const res = await axios.post(`${getBackendUrl()}/api/copilot/parse`, {
-        prompt: aiPrompt,
-        deviceId,
-      });
-
-      if (res.data.rule) {
-        const parsed = res.data.rule;
-        setRuleName(parsed.name);
-        setSensorComp(parsed.sensor_component);
-        setCondition(parsed.condition);
-        setTriggerVal(parsed.trigger_value);
-        setActionComp(parsed.action_component);
-        setActionType(parsed.action_type);
-        setActionVal(parsed.action_value);
-      }
-    } catch (err) {
-      alert('AI Copilot parsing error.');
-    } finally {
-      setAiParsing(false);
-    }
-  };
-
-  if (loading) {
-    return <div className="p-8 text-center text-sm text-gray-400">Loading automation engine rules...</div>;
-  }
 
   return (
-    <div className="space-y-8 max-w-4xl mx-auto">
-      {/* Page Header */}
-      <div className="flex items-center justify-between">
-        <div className="flex items-center space-x-3">
-          <Link href={`/devices/${deviceId}`} className="p-2 bg-gray-800 hover:bg-gray-700 text-gray-300 rounded-xl">
-            <ArrowLeft className="h-4 w-4" />
-          </Link>
-          <div>
-            <h1 className="text-2xl font-bold text-white tracking-tight">Automation Rules Engine</h1>
-            <p className="text-sm text-gray-400 mt-0.5">Device ID: <span className="text-blue-300 font-mono">{deviceId}</span></p>
+    <div className="space-y-6 max-w-4xl mx-auto">
+      {/* Header */}
+      <div className="flex items-center justify-between border-b border-zinc-800/80 pb-4">
+        <div>
+          <div className="flex items-center space-x-2">
+            <Link href={`/devices/${deviceId}`} className="text-zinc-400 hover:text-zinc-100 transition-colors">
+              <ArrowLeft className="h-4 w-4" />
+            </Link>
+            <h1 className="text-xl font-bold text-zinc-100 tracking-tight">Automation Rules — {deviceId}</h1>
           </div>
+          <p className="text-xs text-zinc-400 mt-1">
+            Configure sub-10ms edge IFTTT rules for physical GPIO pins on node <strong className="text-zinc-200">{deviceId}</strong>.
+          </p>
         </div>
       </div>
 
-      {/* AI IoT Copilot Rule Generator Bar */}
-      <div className="glass-panel p-5 rounded-2xl border border-purple-500/20 bg-gradient-to-r from-purple-950/20 to-gray-900/60 shadow-lg">
-        <div className="flex items-center space-x-2 text-purple-400 mb-2">
-          <Sparkles className="h-4 w-4 animate-spin" />
-          <span className="font-semibold text-xs uppercase tracking-wide">AI IoT Copilot Assistant</span>
+      {/* Visual Rule Builder Card */}
+      <div className="dev-panel p-5 space-y-4">
+        <div className="flex items-center space-x-2 border-b border-zinc-800 pb-3">
+          <Zap className="h-4 w-4 text-blue-400" />
+          <h2 className="text-sm font-bold text-zinc-100">Create New Visual Rule</h2>
         </div>
-        <p className="text-xs text-gray-300 mb-3">
-          Describe your automation logic in natural English (e.g. <span className="text-purple-300 font-mono">"Turn on LED when motion is detected"</span> or <span className="text-purple-300 font-mono">"Sound buzzer if temperature exceeds 30°C"</span>)
-        </p>
-
-        <form onSubmit={handleAiParse} className="flex gap-2">
-          <input
-            type="text"
-            value={aiPrompt}
-            onChange={(e) => setAiPrompt(e.target.value)}
-            placeholder="Turn on LED when PIR motion is detected..."
-            className="flex-1 bg-gray-950 border border-gray-700 rounded-xl px-4 py-2 text-xs text-white placeholder-gray-500 focus:outline-none focus:border-purple-500"
-          />
-          <button
-            type="submit"
-            disabled={aiParsing}
-            className="px-4 py-2 bg-purple-600 hover:bg-purple-500 text-white rounded-xl text-xs font-semibold shadow-md flex items-center space-x-1 disabled:opacity-50"
-          >
-            <Sparkles className="h-3.5 w-3.5" />
-            <span>{aiParsing ? 'Parsing...' : 'Generate Rule'}</span>
-          </button>
-        </form>
-      </div>
-
-      {/* Rule Creator Form */}
-      <div className="glass-panel p-6 rounded-2xl border border-gray-800 space-y-5">
-        <h3 className="font-bold text-white text-base">Create Automation Rule</h3>
 
         <form onSubmit={handleCreateRule} className="space-y-4">
           <div>
-            <label className="block text-xs font-medium text-gray-400 mb-1">Rule Name</label>
+            <label className="block text-xs font-medium text-zinc-300 mb-1">Rule Name</label>
             <input
               type="text"
               value={ruleName}
               onChange={(e) => setRuleName(e.target.value)}
-              placeholder="e.g. Motion Activated Light"
-              className="w-full bg-gray-900 border border-gray-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-blue-500"
+              placeholder="e.g. Turn ON LED when PIR detects motion"
+              className="w-full bg-zinc-900 border border-zinc-700 text-xs text-zinc-100 rounded p-2"
             />
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 p-4 bg-gray-900/80 rounded-xl border border-gray-800">
-            {/* IF Trigger Block */}
-            <div className="space-y-3">
-              <span className="text-xs font-bold text-blue-400 uppercase tracking-wider block">IF (Sensor Trigger)</span>
-
-              <div>
-                <label className="block text-[11px] text-gray-400 mb-1">Sensor Component</label>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="p-3 bg-zinc-950 rounded border border-zinc-800 space-y-2">
+              <span className="text-[10px] font-mono text-zinc-500 font-bold uppercase">WHEN (TRIGGER CONDITION)</span>
+              <div className="space-y-2">
                 <select
                   value={sensorComp}
                   onChange={(e) => setSensorComp(e.target.value)}
-                  className="w-full bg-gray-950 border border-gray-700 rounded-lg px-3 py-1.5 text-xs text-white"
+                  className="w-full bg-zinc-900 border border-zinc-700 text-xs text-zinc-100 rounded p-2 font-mono"
                 >
+                  <option value="DHT11">DHT11 Temperature/Humidity</option>
                   <option value="PIR">PIR Motion Sensor</option>
-                  <option value="DHT11">DHT11 Temperature Sensor</option>
                   <option value="LDR">LDR Light Sensor</option>
-                  <option value="HC-SR04">HC-SR04 Distance Sensor</option>
+                  <option value="HC-SR04">Distance Sensor</option>
                   <option value="PUSH_BUTTON">Push Button</option>
                 </select>
-              </div>
 
-              <div className="grid grid-cols-2 gap-2">
-                <div>
-                  <label className="block text-[11px] text-gray-400 mb-1">Condition</label>
+                <div className="grid grid-cols-2 gap-2">
                   <select
                     value={condition}
                     onChange={(e) => setCondition(e.target.value as any)}
-                    className="w-full bg-gray-950 border border-gray-700 rounded-lg px-2 py-1.5 text-xs text-white"
+                    className="bg-zinc-900 border border-zinc-700 text-xs text-zinc-100 rounded p-2 font-mono"
                   >
-                    <option value="DETECTED">DETECTED (True)</option>
+                    <option value="DETECTED">DETECTED</option>
+                    <option value="GREATER_THAN">GREATER THAN</option>
+                    <option value="LESS_THAN">LESS THAN</option>
                     <option value="EQUALS">EQUALS</option>
-                    <option value="GREATER_THAN">GREATER THAN (&gt;)</option>
-                    <option value="LESS_THAN">LESS THAN (&lt;)</option>
                   </select>
-                </div>
 
-                <div>
-                  <label className="block text-[11px] text-gray-400 mb-1">Trigger Value</label>
                   <input
                     type="number"
                     value={triggerVal}
                     onChange={(e) => setTriggerVal(Number(e.target.value))}
-                    className="w-full bg-gray-950 border border-gray-700 rounded-lg px-3 py-1.5 text-xs text-white"
+                    className="bg-zinc-900 border border-zinc-700 text-xs text-zinc-100 rounded p-2 font-mono"
                   />
                 </div>
               </div>
             </div>
 
-            {/* THEN Action Block */}
-            <div className="space-y-3">
-              <span className="text-xs font-bold text-emerald-400 uppercase tracking-wider block">THEN (Output Action)</span>
-
-              <div>
-                <label className="block text-[11px] text-gray-400 mb-1">Actuator Component</label>
+            <div className="p-3 bg-zinc-950 rounded border border-zinc-800 space-y-2">
+              <span className="text-[10px] font-mono text-zinc-500 font-bold uppercase">THEN (ACTION EXECUTION)</span>
+              <div className="space-y-2">
                 <select
                   value={actionComp}
                   onChange={(e) => setActionComp(e.target.value)}
-                  className="w-full bg-gray-950 border border-gray-700 rounded-lg px-3 py-1.5 text-xs text-white"
+                  className="w-full bg-zinc-900 border border-zinc-700 text-xs text-zinc-100 rounded p-2 font-mono"
                 >
-                  <option value="LED">Status LED (GPIO 18)</option>
-                  <option value="BUZZER">Buzzer Alarm (GPIO 19)</option>
-                  <option value="SERVO">Servo Motor (GPIO 21)</option>
+                  <option value="LED">LED Indicator</option>
+                  <option value="BUZZER">Alarm Buzzer</option>
+                  <option value="RELAY">Power Relay</option>
+                  <option value="GENERIC_OUTPUT">Output Actuator</option>
                 </select>
-              </div>
 
-              <div className="grid grid-cols-2 gap-2">
-                <div>
-                  <label className="block text-[11px] text-gray-400 mb-1">Action Type</label>
-                  <select
-                    value={actionType}
-                    onChange={(e) => setActionType(e.target.value)}
-                    className="w-full bg-gray-950 border border-gray-700 rounded-lg px-2 py-1.5 text-xs text-white"
-                  >
-                    <option value="GPIO_WRITE">GPIO WRITE</option>
-                    <option value="SERVO_ANGLE">SERVO ANGLE</option>
-                  </select>
-                </div>
-
-                <div>
-                  <label className="block text-[11px] text-gray-400 mb-1">Action Value</label>
-                  <input
-                    type="number"
-                    value={actionVal}
-                    onChange={(e) => setActionVal(Number(e.target.value))}
-                    className="w-full bg-gray-950 border border-gray-700 rounded-lg px-3 py-1.5 text-xs text-white"
-                  />
-                </div>
+                <select
+                  value={actionVal}
+                  onChange={(e) => setActionVal(Number(e.target.value))}
+                  className="w-full bg-zinc-900 border border-zinc-700 text-xs text-zinc-100 rounded p-2 font-mono"
+                >
+                  <option value={1}>TURN ON (1)</option>
+                  <option value={0}>TURN OFF (0)</option>
+                </select>
               </div>
             </div>
           </div>
 
-          <div className="flex justify-end">
-            <button
-              type="submit"
-              className="px-5 py-2.5 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-semibold shadow-lg glow-blue flex items-center space-x-1.5"
-            >
-              <Plus className="h-4 w-4" />
-              <span>Add Rule</span>
-            </button>
+          <div className="flex items-center justify-end">
+            <Button variant="primary" size="sm" type="submit" loading={submitting} icon={<Plus className="h-3.5 w-3.5" />}>
+              Save Automation Rule
+            </Button>
           </div>
         </form>
       </div>
 
-      {/* Active Rules List */}
-      <div className="glass-panel p-6 rounded-2xl border border-gray-800 space-y-4">
-        <h3 className="font-bold text-white text-base">Active Automation Rules</h3>
+      {/* Rules List */}
+      <div className="dev-panel overflow-hidden">
+        <div className="p-4 border-b border-zinc-800">
+          <h2 className="text-xs font-bold text-zinc-100">Configured Rules for {deviceId}</h2>
+        </div>
 
         {rules.length === 0 ? (
-          <p className="text-xs text-gray-500 text-center py-6">No automation rules created yet.</p>
+          <div className="p-6 text-center text-xs text-zinc-500 font-mono">No automation rules configured for this node.</div>
         ) : (
-          rules.map((rule) => (
-            <div
-              key={rule.id}
-              className="p-4 bg-gray-900/80 rounded-xl border border-gray-800 flex items-center justify-between"
-            >
-              <div>
-                <div className="flex items-center space-x-2">
-                  <Zap className="h-4 w-4 text-amber-400" />
-                  <span className="font-semibold text-sm text-white">{rule.name}</span>
+          <div className="divide-y divide-zinc-800">
+            {rules.map((r) => (
+              <div key={r.id} className="p-4 flex items-center justify-between font-mono text-xs">
+                <div>
+                  <div className="font-bold text-zinc-100">{r.name}</div>
+                  <div className="text-zinc-400 text-[11px] mt-0.5">
+                    IF {r.sensor_component} [{r.condition}] {r.trigger_value} ➔ SET {r.action_component} = {r.action_value}
+                  </div>
                 </div>
-                <p className="text-xs text-gray-400 mt-1 font-mono">
-                  IF <span className="text-blue-300">{rule.sensor_component}</span> {rule.condition} ({rule.trigger_value}) THEN <span className="text-emerald-300">{rule.action_component}</span> = {rule.action_value}
-                </p>
+                <div className="flex items-center space-x-2">
+                  <Badge variant={r.is_active ? 'success' : 'neutral'}>{r.is_active ? 'Active' : 'Disabled'}</Badge>
+                  <button onClick={() => handleDeleteRule(r.id)} className="text-zinc-500 hover:text-rose-400 p-1">
+                    <Trash2 className="h-4 w-4" />
+                  </button>
+                </div>
               </div>
-
-              <button
-                onClick={() => handleDeleteRule(rule.id)}
-                className="p-2 text-gray-500 hover:text-red-400 hover:bg-gray-800 rounded-lg transition-colors"
-              >
-                <Trash2 className="h-4 w-4" />
-              </button>
-            </div>
-          ))
+            ))}
+          </div>
         )}
       </div>
     </div>

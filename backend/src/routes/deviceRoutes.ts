@@ -4,6 +4,7 @@ import { query } from '../db';
 import { getLocalIpAddress, getAllNetworkInterfaces } from '../config/network';
 import { aiCopilotService } from '../services/aiCopilot';
 import { Server as SocketIOServer } from 'socket.io';
+import { getMqttBroker } from '../services/mqttBroker';
 
 export function createDeviceManagementRouter(io: SocketIOServer): Router {
   const router = Router();
@@ -264,11 +265,148 @@ export function createDeviceManagementRouter(io: SocketIOServer): Router {
         [id, 'MANUAL_COMMAND_SENT', `Manual control: Set GPIO ${gpio_pin} to ${value}`]
       );
 
+      // Instantly push command over MQTT
+      const broker = getMqttBroker();
+      if (broker) {
+        broker.publishCommand(id, Number(gpio_pin), Number(value), cmd.id);
+      }
+
       io.to(id).emit('command_created', cmd);
 
       return res.status(201).json({ success: true, command: cmd });
     } catch (error: any) {
       return res.status(500).json({ error: 'Failed to queue command' });
+    }
+  });
+
+  // GLOBAL AUTOMATION ROUTES
+  // GET /api/automations - Retrieve all automation rules across all devices
+  router.get('/automations', async (req: Request, res: Response) => {
+    try {
+      const rulesRes = await query('SELECT * FROM automation_rules ORDER BY created_at DESC');
+      const devRes = await query('SELECT id, name FROM devices');
+      
+      const deviceMap = new Map<string, string>();
+      devRes.rows.forEach((d: any) => deviceMap.set(d.id, d.name));
+
+      const rulesWithDeviceName = rulesRes.rows.map((r: any) => ({
+        ...r,
+        device_name: deviceMap.get(r.device_id) || r.device_id,
+      }));
+
+      return res.json({ rules: rulesWithDeviceName });
+    } catch (error: any) {
+      console.error('Error fetching global automations:', error);
+      return res.status(500).json({ error: 'Failed to retrieve automation rules' });
+    }
+  });
+
+  // PATCH /api/automations/:ruleId/toggle - Toggle rule active status
+  router.patch('/automations/:ruleId/toggle', async (req: Request, res: Response) => {
+    const { ruleId } = req.params;
+    const { is_active } = req.body;
+
+    try {
+      const result = await query(
+        'UPDATE automation_rules SET is_active = $1 WHERE id = $2 RETURNING *',
+        [Boolean(is_active), ruleId]
+      );
+      
+      io.emit('rule_updated', { ruleId, is_active });
+      return res.json({ success: true, rule: result.rows[0] });
+    } catch (error: any) {
+      console.error('Error toggling rule:', error);
+      return res.status(500).json({ error: 'Failed to toggle automation rule' });
+    }
+  });
+
+  // DELETE /api/automations/:ruleId - Delete rule globally
+  router.delete('/automations/:ruleId', async (req: Request, res: Response) => {
+    const { ruleId } = req.params;
+
+    try {
+      await query('DELETE FROM automation_rules WHERE id = $1', [ruleId]);
+      io.emit('rule_deleted', { ruleId });
+      return res.json({ success: true, message: 'Rule deleted successfully' });
+    } catch (error: any) {
+      console.error('Error deleting rule:', error);
+      return res.status(500).json({ error: 'Failed to delete automation rule' });
+    }
+  });
+
+  // GLOBAL TELEMETRY ROUTES
+  // GET /api/telemetry - Retrieve telemetry readings across devices
+  router.get('/telemetry', async (req: Request, res: Response) => {
+    const { deviceId, limit } = req.query;
+    const queryLimit = limit ? Math.min(Number(limit), 200) : 100;
+
+    try {
+      let readingsRes;
+      if (deviceId && typeof deviceId === 'string') {
+        readingsRes = await query(
+          'SELECT * FROM sensor_readings WHERE device_id = $1 ORDER BY timestamp DESC LIMIT $2',
+          [deviceId, queryLimit]
+        );
+      } else {
+        readingsRes = await query(
+          'SELECT * FROM sensor_readings ORDER BY timestamp DESC LIMIT $1',
+          [queryLimit]
+        );
+      }
+
+      const devRes = await query('SELECT id, name FROM devices');
+      const deviceMap = new Map<string, string>();
+      devRes.rows.forEach((d: any) => deviceMap.set(d.id, d.name));
+
+      const readingsWithDevName = readingsRes.rows.map((r: any) => ({
+        ...r,
+        device_name: deviceMap.get(r.device_id) || r.device_id,
+      }));
+
+      return res.json({ readings: readingsWithDevName });
+    } catch (error: any) {
+      console.error('Error fetching global telemetry:', error);
+      return res.status(500).json({ error: 'Failed to retrieve telemetry data' });
+    }
+  });
+
+  // GET /api/telemetry/stats - Aggregate telemetry statistics
+  router.get('/telemetry/stats', async (req: Request, res: Response) => {
+    try {
+      const readingsRes = await query('SELECT * FROM sensor_readings ORDER BY timestamp DESC LIMIT 500');
+      const readings = readingsRes.rows;
+
+      const readingTypesSet = new Set<string>();
+      const deviceIdsSet = new Set<string>();
+      let totalValue = 0;
+      let maxValue = -Infinity;
+      let minValue = Infinity;
+
+      readings.forEach((r: any) => {
+        if (r.reading_type) readingTypesSet.add(r.reading_type.toLowerCase());
+        if (r.device_id) deviceIdsSet.add(r.device_id);
+        const val = Number(r.value);
+        if (!isNaN(val)) {
+          totalValue += val;
+          if (val > maxValue) maxValue = val;
+          if (val < minValue) minValue = val;
+        }
+      });
+
+      const count = readings.length;
+      const stats = {
+        totalReadings: count,
+        activeDevicesCount: deviceIdsSet.size,
+        sensorTypes: Array.from(readingTypesSet),
+        averageValue: count > 0 ? parseFloat((totalValue / count).toFixed(2)) : 0,
+        maxValue: count > 0 && maxValue !== -Infinity ? maxValue : 0,
+        minValue: count > 0 && minValue !== Infinity ? minValue : 0,
+      };
+
+      return res.json(stats);
+    } catch (error: any) {
+      console.error('Error calculating telemetry stats:', error);
+      return res.status(500).json({ error: 'Failed to calculate telemetry stats' });
     }
   });
 

@@ -1,21 +1,22 @@
 /*
  * ==============================================================================
- * IoT-to-Web Universal ESP32 Firmware (Fully Dynamic Hardware Configuration)
+ * IoT-to-Web Universal ESP32 Firmware (Hybrid MQTT + HTTP REST Fallback)
  * ==============================================================================
  * 
- * Handles ALL Supported & Custom/Generic Sensors & Actuators at Runtime:
- * - Special Drivers: DHT11, PIR, HC-SR04, LDR, Push Button, LED, Buzzer
- * - Generic Sensors: Any Digital Sensor (Flame/Rain/Touch/Tilt), Any Analog Sensor (Soil Moisture/Gas MQ2/Sound/Potentiometer)
- * - Generic Actuators: Any Digital Output (Relay, Solenoid, Motor Driver, Indicator)
+ * Communication Protocols:
+ * 1. Primary: Sub-5ms MQTT Pub/Sub with Last Will & Testament (LWT) on Port 1883
+ * 2. Fallback: HTTP REST Polling on Port 4000
  * 
  * Required Libraries in Arduino IDE:
  * - ArduinoJson (v6.x or v7.x)
+ * - PubSubClient (by Nick O'Leary)
  * - DHT sensor library (by Adafruit)
  * ==============================================================================
  */
 
 #include <WiFi.h>
 #include <HTTPClient.h>
+#include <PubSubClient.h>
 #include <ArduinoJson.h>
 #include <DHT.h>
 
@@ -25,9 +26,10 @@
 const char* WIFI_SSID     = "YOUR_WIFI_SSID";
 const char* WIFI_PASSWORD = "YOUR_WIFI_PASSWORD";
 
-// LAPTOP LOCAL LAN IP ADDRESS (e.g. 192.168.1.100 or 172.16.208.18)
+// SERVER IP ADDRESS (Local LAN IP or Render Cloud domain e.g. "my-app.onrender.com")
 const char* SERVER_IP     = "192.168.1.100";
 const int   SERVER_PORT   = 4000;
+const int   MQTT_PORT     = 1883;
 
 // DEVICE CREDENTIALS GENERATED IN DASHBOARD (/devices)
 const char* DEVICE_ID     = "ESP32-A7F92";
@@ -50,19 +52,29 @@ int componentCount = 0;
 
 DHT* dhtSensor = nullptr;
 
-// Timers (ms)
-const unsigned long TELEMETRY_INTERVAL_MS   = 2000; // Send telemetry every 2 seconds
-const unsigned long COMMAND_POLL_INTERVAL_MS = 100;  // Fast poll commands every 100ms for real-time responsiveness
-const unsigned long HEARTBEAT_INTERVAL_MS    = 10000; // Heartbeat ping every 10 seconds
+WiFiClient espClient;
+PubSubClient mqttClient(espClient);
 
-unsigned long lastTelemetryTime   = 0;
-unsigned long lastCommandPollTime = 0;
-unsigned long lastHeartbeatTime   = 0;
+// Timers (ms)
+const unsigned long TELEMETRY_INTERVAL_MS      = 2000;  // Send telemetry every 2 seconds
+const unsigned long COMMAND_POLL_INTERVAL_MS    = 100;   // HTTP fallback command poll
+const unsigned long HEARTBEAT_INTERVAL_MS       = 10000; // Heartbeat ping
+const unsigned long CONFIG_REFRESH_INTERVAL_MS  = 15000; // Hardware pin refresh
+
+unsigned long lastTelemetryTime     = 0;
+unsigned long lastCommandPollTime   = 0;
+unsigned long lastHeartbeatTime     = 0;
+unsigned long lastConfigRefreshTime = 0;
 
 String serverBaseUrl;
+String mqttTelemetryTopic;
+String mqttCommandTopic;
+String mqttStatusTopic;
 
 // Prototypes
 void connectToWiFi();
+void connectToMQTT();
+void mqttCallback(char* topic, byte* payload, unsigned int length);
 void fetchHardwareConfig();
 void sendSensorTelemetry();
 void pollAndExecuteCommands();
@@ -74,12 +86,19 @@ void setup() {
   delay(1000);
 
   Serial.println("\n==================================================");
-  Serial.println("  IoT-to-Web Universal Dynamic ESP32 Firmware     ");
+  Serial.println("  IoT-to-Web Universal ESP32 Firmware (MQTT Hybrid)");
   Serial.println("==================================================");
 
-  serverBaseUrl = "http://" + String(SERVER_IP) + ":" + String(SERVER_PORT) + "/api/device/" + String(DEVICE_ID);
+  serverBaseUrl       = "http://" + String(SERVER_IP) + ":" + String(SERVER_PORT) + "/api/device/" + String(DEVICE_ID);
+  mqttTelemetryTopic  = "devices/" + String(DEVICE_ID) + "/telemetry";
+  mqttCommandTopic    = "devices/" + String(DEVICE_ID) + "/commands";
+  mqttStatusTopic     = "devices/" + String(DEVICE_ID) + "/status";
+
+  mqttClient.setServer(SERVER_IP, MQTT_PORT);
+  mqttClient.setCallback(mqttCallback);
 
   connectToWiFi();
+  connectToMQTT();
   fetchHardwareConfig();
 }
 
@@ -88,10 +107,16 @@ void loop() {
     connectToWiFi();
   }
 
+  if (!mqttClient.connected()) {
+    connectToMQTT();
+  } else {
+    mqttClient.loop(); // Process incoming MQTT command messages instantly (< 5ms)
+  }
+
   unsigned long currentMillis = millis();
 
-  // 1. Poll Commands Every 1s
-  if (currentMillis - lastCommandPollTime >= COMMAND_POLL_INTERVAL_MS) {
+  // 1. Fallback HTTP Poll Commands Every 100ms if MQTT Disconnected
+  if (!mqttClient.connected() && (currentMillis - lastCommandPollTime >= COMMAND_POLL_INTERVAL_MS)) {
     lastCommandPollTime = currentMillis;
     pollAndExecuteCommands();
   }
@@ -102,13 +127,61 @@ void loop() {
     sendSensorTelemetry();
   }
 
-  // 3. Send Heartbeat Every 10s
-  if (currentMillis - lastHeartbeatTime >= HEARTBEAT_INTERVAL_MS) {
+  // 3. Send Heartbeat Every 10s if MQTT Disconnected
+  if (!mqttClient.connected() && (currentMillis - lastHeartbeatTime >= HEARTBEAT_INTERVAL_MS)) {
     lastHeartbeatTime = currentMillis;
     sendHeartbeat();
   }
 
+  // 4. Periodically Refresh Hardware Pin Config (Auto-detects new UI hardware additions)
+  if (currentMillis - lastConfigRefreshTime >= CONFIG_REFRESH_INTERVAL_MS) {
+    lastConfigRefreshTime = currentMillis;
+    fetchHardwareConfig();
+  }
+
   delay(10);
+}
+
+void connectToMQTT() {
+  if (WiFi.status() != WL_CONNECTED) return;
+
+  Serial.print("Connecting to MQTT Broker... ");
+  // Connect with Last Will and Testament (LWT) topic
+  if (mqttClient.connect(DEVICE_ID, mqttStatusTopic.c_str(), 1, true, "OFFLINE")) {
+    Serial.println("✅ Connected to MQTT Broker!");
+    mqttClient.publish(mqttStatusTopic.c_str(), "ONLINE", true);
+    mqttClient.subscribe(mqttCommandTopic.c_str());
+    Serial.printf("📡 Subscribed to MQTT Command Topic: %s\n", mqttCommandTopic.c_str());
+  } else {
+    Serial.printf("❌ MQTT Connect failed (state %d). Using HTTP REST fallback.\n", mqttClient.state());
+  }
+}
+
+void mqttCallback(char* topic, byte* payload, unsigned int length) {
+  String message;
+  for (int i = 0; i < length; i++) {
+    message += (char)payload[i];
+  }
+  Serial.printf("⚡ Instant MQTT Command Received on %s: %s\n", topic, message.c_str());
+
+  StaticJsonDocument<256> doc;
+  DeserializationError err = deserializeJson(doc, message);
+  if (!err) {
+    int cmdId = doc["id"] | 0;
+    int gpio  = doc["gpio"] | -1;
+    int val   = doc["value"] | 0;
+
+    if (gpio >= 0) {
+      pinMode(gpio, OUTPUT);
+      digitalWrite(gpio, val == 1 ? HIGH : LOW);
+      Serial.printf("⚙️ MQTT Executed GPIO %d -> %d\n", gpio, val);
+
+      // Send ACK back over MQTT
+      String ackTopic = "devices/" + String(DEVICE_ID) + "/ack";
+      String ackPayload = "{\"commandId\":" + String(cmdId) + ",\"gpio\":" + String(gpio) + ",\"value\":" + String(val) + "}";
+      mqttClient.publish(ackTopic.c_str(), ackPayload.c_str());
+    }
+  }
 }
 
 void connectToWiFi() {
@@ -252,13 +325,17 @@ void sendSensorTelemetry() {
   String jsonPayload;
   serializeJson(doc, jsonPayload);
 
-  HTTPClient http;
-  http.begin(serverBaseUrl + "/data");
-  http.addHeader("Content-Type", "application/json");
-  http.addHeader("X-Device-Token", DEVICE_TOKEN);
+  if (mqttClient.connected()) {
+    mqttClient.publish(mqttTelemetryTopic.c_str(), jsonPayload.c_str());
+  } else {
+    HTTPClient http;
+    http.begin(serverBaseUrl + "/data");
+    http.addHeader("Content-Type", "application/json");
+    http.addHeader("X-Device-Token", DEVICE_TOKEN);
 
-  http.POST(jsonPayload);
-  http.end();
+    http.POST(jsonPayload);
+    http.end();
+  }
 }
 
 // ==============================================================================
