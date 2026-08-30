@@ -23,6 +23,7 @@ import {
 } from 'lucide-react';
 import axios from 'axios';
 import { getBackendUrl, Device } from '@/lib/api';
+import WebSerialFlasher from '@/components/WebSerialFlasher';
 
 export default function ProvisioningWizardPage() {
   const [currentStep, setCurrentStep] = useState<number>(1);
@@ -384,6 +385,8 @@ void loop() {
               <code>{generateFirmwareCode()}</code>
             </pre>
           </div>
+
+          <WebSerialFlasher deviceId={selectedDeviceId} deviceToken={selectedDevice?.token} />
 
           <div className="flex items-center justify-between pt-3 border-t border-zinc-800">
             <Button variant="outline" size="sm" onClick={() => setCurrentStep(1)}>

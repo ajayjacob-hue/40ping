@@ -7,6 +7,7 @@ import { FileCode2, Download, Copy, Check, ArrowLeft, Wifi, Server, Key, ShieldC
 import axios from 'axios';
 import { getBackendUrl, Device, Component } from '@/lib/api';
 import Button from '@/components/ui/Button';
+import WebSerialFlasher from '@/components/WebSerialFlasher';
 
 export default function FirmwareGeneratorPage() {
   const params = useParams();
@@ -343,6 +344,9 @@ void pollCommands() {
           Download .ino Sketch
         </Button>
       </div>
+
+      {/* WebSerial USB Browser Flasher */}
+      <WebSerialFlasher deviceId={deviceId} deviceToken={device?.token} />
 
       {/* Configured Components Banner */}
       <div className="dev-panel p-4 flex items-center justify-between">

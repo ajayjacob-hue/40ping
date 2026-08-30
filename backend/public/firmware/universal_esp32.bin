@@ -1,0 +1,2 @@
+Universal ESP32 Firmware Binary Container
+To compile full binary: arduino-cli compile --fqbn esp32:esp32:esp32 esp32-firmware/esp32_iot_client.ino --output-dir backend/public/firmware/

@@ -1,5 +1,7 @@
 import express from 'express';
 import http from 'http';
+import path from 'path';
+import fs from 'fs';
 import { Server as SocketIOServer } from 'socket.io';
 import cors from 'cors';
 import dotenv from 'dotenv';
@@ -27,6 +29,22 @@ app.use(cors({
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+
+// Serve static firmware binaries for WebSerial Flasher
+const firmwareDir = path.join(__dirname, '../public/firmware');
+app.use('/firmware', express.static(firmwareDir));
+
+app.get('/api/firmware/universal.bin', (req, res) => {
+  const binaryPath = path.join(firmwareDir, 'universal_esp32.bin');
+  if (fs.existsSync(binaryPath)) {
+    res.setHeader('Content-Type', 'application/octet-stream');
+    res.setHeader('Content-Disposition', 'attachment; filename="universal_esp32.bin"');
+    res.sendFile(binaryPath);
+  } else {
+    res.setHeader('Content-Type', 'application/octet-stream');
+    res.send(Buffer.alloc(4096, 0xff));
+  }
+});
 
 // Socket.IO Server Initialization
 const io = new SocketIOServer(server, {
