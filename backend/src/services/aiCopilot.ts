@@ -289,7 +289,16 @@ You MUST return ONLY valid JSON matching this exact structure:
       triggerVal = 1;
     }
 
-    const ruleName = `IF ${sensor} ${condition} ${triggerVal} ➔ ${actionComp} = ${actionVal}${durationSec > 0 ? ` (${durationSec}s)` : ''}`;
+    let ruleName = `${actionComp} Turn-${actionVal === 1 ? 'On' : 'Off'} for ${sensor === 'PIR' ? 'Motion Detection' : sensor === 'PUSH_BUTTON' ? 'Button Press' : `${sensor} Threshold`}`;
+    if (actionComp === 'SERVO') {
+      ruleName = `Servo ${actionVal}° Angle on ${sensor === 'HC-SR04' ? 'Proximity' : sensor}`;
+    } else if (actionComp === 'BUZZER') {
+      ruleName = `Buzzer Alarm on ${sensor === 'PIR' ? 'Motion Detection' : `${sensor} Alert`}`;
+    } else if (sensor === 'LDR') {
+      ruleName = `${actionComp} Control on Light Level`;
+    } else if (sensor === 'DHT11') {
+      ruleName = `${actionComp} Turn-${actionVal === 1 ? 'On' : 'Off'} on Temperature ${condition === 'GREATER_THAN' ? 'High' : 'Low'}`;
+    }
     const cppSnippet = this.generateCppSnippet(sensor, condition, triggerVal, actionComp, actionVal, durationSec);
 
     return {

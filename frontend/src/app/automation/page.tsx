@@ -794,24 +794,41 @@ void loop() {
                 <div className="space-y-1.5">
                   <div className="flex items-center space-x-2">
                     <h3 className="font-bold text-xs text-zinc-100">{rule.name}</h3>
-                    <Badge variant={rule.is_active ? 'success' : 'neutral'}>
+                    <span
+                      className={`px-2 py-0.5 text-[10px] font-mono font-medium rounded ${
+                        rule.is_active
+                          ? 'bg-emerald-950/60 border border-emerald-500/40 text-emerald-400'
+                          : 'bg-zinc-800 border border-zinc-700 text-zinc-400'
+                      }`}
+                    >
                       {rule.is_active ? 'Active' : 'Disabled'}
-                    </Badge>
+                    </span>
                   </div>
 
                   {/* Horizontal Rule Structure */}
                   <div className="flex flex-wrap items-center gap-2 font-mono text-xs text-zinc-300">
-                    <span className="px-2 py-0.5 rounded bg-zinc-900 border border-zinc-800 text-zinc-400 text-[11px]">
+                    <span className="px-2 py-0.5 rounded bg-zinc-900 border border-zinc-800 text-zinc-400 text-[11px] font-bold">
                       WHEN
                     </span>
-                    <span className="text-zinc-200 font-semibold">{rule.sensor_component}</span>
-                    <span className="text-blue-400">{rule.condition}</span>
+                    <span className="text-zinc-100 font-bold">{rule.sensor_component}</span>
+                    <span className="text-blue-400 font-semibold">{rule.condition}</span>
                     <span className="text-emerald-400 font-bold">{rule.trigger_value}</span>
-                    <span className="px-2 py-0.5 rounded bg-zinc-900 border border-zinc-800 text-zinc-400 text-[11px]">
+                    <span className="px-2 py-0.5 rounded bg-zinc-900 border border-zinc-800 text-zinc-400 text-[11px] font-bold">
                       THEN
                     </span>
-                    <span className="text-zinc-200 font-semibold">{rule.action_component}</span>
-                    <span className="text-amber-400">{rule.action_value === 1 ? 'TURN ON (1)' : 'TURN OFF (0)'}</span>
+                    <span className="text-zinc-100 font-bold">{rule.action_component}</span>
+                    <span className="text-amber-400 font-semibold">
+                      {rule.action_component === 'SERVO'
+                        ? `SET ${rule.action_value}°`
+                        : rule.action_value === 1
+                        ? 'TURN ON (1)'
+                        : 'TURN OFF (0)'}
+                    </span>
+                    {(rule.duration_seconds || (rule.sensor_component === 'PIR' || rule.sensor_component === 'PUSH_BUTTON')) && (
+                      <span className="px-2 py-0.5 rounded bg-purple-900/30 border border-purple-500/30 text-purple-300 text-[11px] font-mono">
+                        ⏱️ {rule.duration_seconds || 5}s Auto-Off
+                      </span>
+                    )}
                   </div>
 
                   <p className="text-[11px] text-zinc-500 font-mono">Device: {rule.device_id}</p>
